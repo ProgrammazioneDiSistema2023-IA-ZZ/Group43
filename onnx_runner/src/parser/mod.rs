@@ -1,2 +1,2 @@
 pub mod parser;
-mod onnx_model;
+pub mod onnx_model;
