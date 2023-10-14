@@ -121,17 +121,13 @@ impl From<& TensorProto> for OnnxNode{
     }
 }
 
-pub trait AddNeighbour{
-    fn add_output(&mut self, node:  Rc<RefCell<OnnxNode>>) -> ();
-    fn add_input(&mut self, node:  Rc<RefCell<OnnxNode>>) -> ();
+pub trait AddNeighbourConnection {
+    fn add_connection(base_node:  Rc<RefCell<OnnxNode>>, destination_node:  Rc<RefCell<OnnxNode>>) -> ();
 }
 
-impl AddNeighbour for OnnxNode {
-    fn add_output(&mut self, node: Rc<RefCell<OnnxNode>>) -> () {
-        self.outputs.push(node);
-    }
-
-    fn add_input(&mut self, node: Rc<RefCell<OnnxNode>>) -> () {
-        self.inputs.push(Rc::downgrade(&node));
+impl AddNeighbourConnection for OnnxNode {
+    fn add_connection(base_node:  Rc<RefCell<OnnxNode>>, destination_node: Rc<RefCell<OnnxNode>>) -> () {
+        base_node.borrow_mut().outputs.push(destination_node.clone());
+        destination_node.borrow_mut().inputs.push(Rc::downgrade(&base_node));
     }
 }

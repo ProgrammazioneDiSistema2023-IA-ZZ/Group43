@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::rc::Rc;
 use std::string::String;
-use crate::onnx::onnx_node::{AddNeighbour, OnnxNode};
+use crate::onnx::onnx_node::{AddNeighbourConnection, OnnxNode};
 use crate::onnx::temporary_node::{FromRef, TmpOnnxNode};
 // use crate::onnx::onnx_node::{OnnxNode, FunctionNode, InputNode, AddOut};
 // use crate::onnx::onnx_node::OnnxNode::{Function, Input};
@@ -47,8 +47,11 @@ impl From<ModelProto> for OnnxGraph{
             println!("{:?} => {:?}", node.0, node.1.borrow())
         }
 
-        input_nodes[&"Input3".to_string()].borrow_mut().add_output(fun_nodes[&"Convolution28".to_string()].clone());
-        // let root_name = String::from("root");
+        for f_node in fun_nodes.iter(){
+
+        }
+
+        OnnxNode::add_connection(input_nodes[&"Input3".to_string()].clone(), fun_nodes[&"Convolution28".to_string()].clone());
         let root = input_nodes[&"Input3".to_string()].clone();
         OnnxGraph{
             root_node: root,
