@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
-use std::fmt::Error;
+use std::collections::HashSet;
+use std::fmt::{Display, Error, Formatter};
 use std::io;
 use std::rc::{Rc, Weak};
 use crate::parser::onnx_model::onnx_proto3::{NodeProto, TensorProto, ValueInfoProto};
@@ -79,14 +80,18 @@ pub struct OnnxNode{
     node_name: String,
     inputs: Vec<Weak<RefCell<OnnxNode>>>,
     outputs: Vec<Rc<RefCell<OnnxNode>>>,
+    inputs_names: Option<HashSet<String>>,
+    outputs_names: Option<HashSet<String>>
 }
 
 impl OnnxNode{
-    fn new(name: & String) -> Self{
+    fn new(name: & String, inputs_name: Option<HashSet<String>>, outputs_names: Option<HashSet<String>>) -> Self{
         OnnxNode{
             node_name: name.to_owned(),
             inputs: Vec::default(),
             outputs: Vec::default(),
+            inputs_names: inputs_name,
+            outputs_names: outputs_names
         }
     }
 
@@ -103,21 +108,47 @@ impl OnnxNode{
     }
 }
 
-impl From<& NodeProto> for OnnxNode{
-    fn from(node_proto: & NodeProto) -> Self {
-        OnnxNode::new(& node_proto.name)
+impl Display for OnnxNode{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut out = format!("Node: {}\nInputs({}, len:{}):\n", self.node_name, self.node_name, self.inputs.len());
+        self.inputs.iter().for_each(|node| {
+            if let Some(n) = node.upgrade(){
+                out += format!("{},", n.borrow().node_name).as_str()
+            }
+        });
+        out += format!("\nOutputs({}, len:{}):\n", self.node_name, self.outputs.len()).as_str();
+        self.outputs.iter().for_each(|node| out += format!("{},\n", node.borrow()).as_str());
+        write!(f, "{}", out)
     }
 }
 
-impl From<& ValueInfoProto> for OnnxNode{
-    fn from(value_proto: & ValueInfoProto) -> Self {
-        OnnxNode::new(& value_proto.name)
+impl From<&NodeProto> for OnnxNode{
+    fn from(node_proto: &NodeProto) -> Self {
+        OnnxNode::new(
+            &format!("{}-{}", node_proto.op_type, node_proto.name),
+            Some(node_proto.input.iter().map(|name| name.to_owned()).collect::<HashSet<String>>()),
+            Some(node_proto.output.iter().map(|name| name.to_owned()).collect::<HashSet<String>>())
+        )
     }
 }
 
-impl From<& TensorProto> for OnnxNode{
-    fn from(tensor_proto: & TensorProto) -> Self {
-        OnnxNode::new(& tensor_proto.name)
+impl From<&ValueInfoProto> for OnnxNode{
+    fn from(value_proto: &ValueInfoProto) -> Self {
+        OnnxNode::new(
+            &value_proto.name,
+            None,
+            None
+        )
+    }
+}
+
+impl From<&TensorProto> for OnnxNode{
+    fn from(tensor_proto: &TensorProto) -> Self {
+        OnnxNode::new(
+            &tensor_proto.name,
+            None,
+            None
+        )
     }
 }
 
