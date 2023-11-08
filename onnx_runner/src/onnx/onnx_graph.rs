@@ -1,8 +1,7 @@
-use std::any::{Any, TypeId};
-use std::cell::{Ref, RefCell};
+use std::cell::{RefCell};
 use std::collections::{HashMap};
 use std::fmt::{Display, Formatter};
-use std::rc::{Rc, Weak};
+use std::rc::{Rc};
 use std::string::String;
 use crate::onnx::onnx_node::{FunctionNode, InputNode, HaveOut, HaveIn, OutputNode, InitNode, Name};
 use crate::parser::onnx_model::onnx_proto3::{ModelProto};
@@ -80,7 +79,7 @@ impl From<ModelProto> for OnnxGraph{
 
         //Define vec of secondaries root that not start from the input
         let secondaries_roots = fun_nodes.iter().filter_map(|node| {
-            if(node.borrow().get_inputs().iter().any(|n| {
+            if node.borrow().get_inputs().iter().any(|n| {
                 match n.upgrade().unwrap().borrow().as_any().downcast_ref::<FunctionNode>() {
                     Some(i) => return true,
                     None => {}
@@ -89,7 +88,7 @@ impl From<ModelProto> for OnnxGraph{
                     Some(i) => true,
                     None => false
                 }
-            }))
+            })
             {
                 None
             }
