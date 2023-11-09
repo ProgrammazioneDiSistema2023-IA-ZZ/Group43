@@ -9,7 +9,8 @@ use crate::parser::onnx_model::onnx_proto3::{ModelProto};
 #[derive(Debug)]
 pub struct OnnxGraph{
     root_node: Rc<RefCell<InputNode>>,
-    secondaries_roots: Vec<Rc<RefCell<FunctionNode>>>
+    secondaries_roots: Vec<Rc<RefCell<FunctionNode>>>,
+    // pub fun_nodes: Vec<Rc<RefCell<FunctionNode>>>
 }
 
 impl Display for OnnxGraph{
@@ -99,7 +100,8 @@ impl From<ModelProto> for OnnxGraph{
 
         OnnxGraph{
             root_node: root_node,
-            secondaries_roots: secondaries_roots
+            secondaries_roots: secondaries_roots,
+            // fun_nodes: fun_nodes
         }
     }
 }

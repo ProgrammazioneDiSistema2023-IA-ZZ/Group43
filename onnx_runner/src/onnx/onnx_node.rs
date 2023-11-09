@@ -91,7 +91,7 @@ impl FunctionNode {
             node_name: name,
             inputs: Vec::default(),
             outputs: Vec::default(),
-            op_type:op_type,
+            op_type: op_type,
             inputs_name: inputs_name,
             outputs_name: outputs_name
         }
@@ -103,6 +103,10 @@ impl FunctionNode {
 
     pub fn get_outputs_name(&self) -> &Vec<String> {
         &self.outputs_name
+    }
+
+    pub fn get_operation_name(&self) -> &String {
+        &self.op_type
     }
 }
 
