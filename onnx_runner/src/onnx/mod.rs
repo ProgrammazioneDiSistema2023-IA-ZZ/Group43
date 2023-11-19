@@ -1,4 +1,4 @@
 pub mod onnx_graph;
 mod onnx_node;
 mod temporary_node;
-mod matrix;
+pub mod matrix;
