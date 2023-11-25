@@ -48,7 +48,9 @@ pub trait TryOperation1{
 
     fn try_relu(&self) -> Result<Self::Output, OperationError>;
 
-    fn try_reshape(&self, dim: Vec<usize>) -> Result<Self::Output, OperationError>;
+    fn try_reshape(&self, dim: &Vec<usize>) -> Result<Self::Output, OperationError>;
+
+    fn try_broadcast(&self, dim: &Vec<usize>) -> Result<Self::Output, OperationError>;
 }
 
 pub trait TryOperation2<T>{
@@ -111,8 +113,28 @@ impl<T: Copy + Add<Output = T> + Default + PartialOrd> TryOperation1 for Matrix2
         ))
     }
 
-    fn try_reshape(&self, dim: Vec<usize>) -> Result<Self::Output, OperationError> {
+    fn try_reshape(&self, dim: &Vec<usize>) -> Result<Self::Output, OperationError> {
         Err(NotImplementedError)
+    }
+
+    fn try_broadcast(&self, dim: &Vec<usize>) -> Result<Self::Output, OperationError> {
+        let mut data = self.get_data_or_error()?.clone();
+        if self.cols != dim[1] {
+            if self.cols == 1 {
+                data = data.iter().map(|d| vec![*d; dim[1]]).flatten().collect();
+            } else {
+                return Err(MismatchSizeError);
+            }
+        }
+
+        if self.rows != dim[0]{
+            if self.rows == 1{
+                data = (0..dim[0]).map(|_| data.clone()).flatten().collect();
+            } else {
+                return Err(MismatchSizeError);
+            }
+        }
+        Ok(Matrix2D::new(dim[0], dim[1], Some(data)))
     }
 }
 
@@ -193,6 +215,40 @@ impl<T: Copy + Add<Output= T>> Matrix<T> {
             sub_matrices: Some(sub_matrices)
         }
     }
+
+    fn get_dim_for_broadcast(dim1: &Vec<usize>, dim2: &Vec<usize>) -> Result<Vec<usize>, OperationError>{
+        let mut dim_same;
+        let mut dim_enlarged;
+        if dim1.len() > dim2.len() {
+            dim_same = dim1;
+            dim_enlarged = Self::enlarge_dim(dim2, dim1.len());
+        } else{
+            dim_same = dim2;
+            dim_enlarged = Self::enlarge_dim(dim1, dim2.len());
+        }
+        dim_same.iter().zip(dim_enlarged.into_iter()).map(|(d1, d2)| {
+            if *d1 == d2{
+                Ok(*d1)
+            } else if *d1 == 1 || d2 == 1 {
+                Ok(*d1 * d2)
+            }else {
+                Err(MismatchSizeError)
+            }
+        }).collect::<Result<Vec<usize>, OperationError>>()
+    }
+
+    fn enlarge_dim(dim: &Vec<usize>, len: usize) -> Vec<usize>{
+        let mut v = Vec::new();
+        let diff = len - dim.len();
+        for i in 0..len {
+            if i < diff{
+                v.push(1);
+            }else {
+                v.push(dim[i - diff]);
+            }
+        }
+        v
+    }
 }
 
 impl<T: Copy> Load<T> for Matrix<T>{
@@ -244,26 +300,85 @@ impl<T: Copy + Add<Output = T> + Default + PartialOrd> TryOperation1 for Matrix<
         }
     }
 
-    fn try_reshape(&self, dim: Vec<usize>) -> Result<Self::Output, OperationError> {
+    fn try_reshape(&self, dim: &Vec<usize>) -> Result<Self::Output, OperationError> {
         if self.dims.iter().fold(1, |acc, val| acc * val) != dim.iter().fold(1, |acc, val| acc * val){
             return Err(MismatchSizeError);
         }
         let data = self.get_data_or_error()?;
-        Ok(Matrix::new(dim, Some(data)))
+        Ok(Matrix::new(dim.to_owned(), Some(data)))
+    }
+
+    fn try_broadcast(&self, dim: &Vec<usize>) -> Result<Self::Output, OperationError> {
+        let this_dim = Self::enlarge_dim(&self.dims, dim.len());
+        let out = self.try_reshape(&this_dim)?;
+        if let Some(m2d) = out.matrix2d{
+            let m2d_out = m2d.try_broadcast(&dim)?;
+            Ok(Matrix::new_with_matrix2d(dim.to_owned(), m2d_out))
+        }
+        else if let Some(subs) = out.sub_matrices {
+            let mut sub_out;
+            if out.dims[0] == 1{
+                if out.dims[0] != dim[0]{
+                    sub_out = (0..dim[0]).map(|_| subs[0].clone()).collect();
+                }else {
+                    sub_out = subs;
+                }
+            }else {
+                if out.dims[0] != dim[0]{
+                    return Err(MismatchSizeError);
+                }else {
+                    sub_out = subs;
+                }
+            }
+            sub_out = sub_out.iter().map(|s| s.try_broadcast(&dim[1..].to_vec())).collect::<Result<Vec<Matrix<T>>, OperationError>>()?;
+            Ok(Matrix::new_with_sub_matrices(dim.to_owned(), sub_out))
+        }
+        else {
+            Err(MatrixCompositionError)
+        }
     }
 }
 
-impl<T: Copy + Add<Output= T>> TryOperation2<&Matrix<T>> for Matrix<T>{
+impl<T: Copy + Add<Output = T> + Default + PartialOrd> TryOperation2<&Matrix<T>> for Matrix<T>{
     type Output = Matrix<T>;
 
     fn try_add(&self, other: &Matrix<T>) -> Result<Matrix<T>, OperationError> {
-        if let (Some(m2d1), Some(m2d2)) = (&self.matrix2d, &other.matrix2d){
-            let m2d_out = m2d1.try_add(m2d2)?;
-            Ok(Matrix::new_with_matrix2d(self.dims.to_owned(), m2d_out))
+        //if same len
+        // => if same value
+        //  => continue
+        // => try broadcast either same dim
+        //else
+        // => create dim(reshape)
+        // => try broadcast either to dim
+        fn try_broadcast_either<T: Copy + Add<Output = T> + Default + PartialOrd>(this: &Matrix<T> , other: &Matrix<T>) -> Result<(Matrix<T>, Matrix<T>), OperationError>{
+            let broadcast_dim = Matrix::<T>::get_dim_for_broadcast(&this.dims, &other.dims)?;
+            let m1 = this.try_broadcast(&broadcast_dim)?;
+            let m2 = other.try_broadcast(&broadcast_dim)?;
+            Ok((m1, m2))
         }
-        else if let (Some(sub1), Some(sub2)) = (&self.sub_matrices, &other.sub_matrices){
+        let m1;
+        let m2;
+        let mut m1_ref = self;
+        let mut m2_ref = other;
+        if self.dims.len() == other.dims.len(){
+            if self.dims.iter().zip(other.dims.iter()).any(|(d1, d2)| d1 != d2){
+                (m1, m2) = try_broadcast_either(self, other)?;
+                m1_ref = &m1;
+                m2_ref = &m2;
+            }
+        }else{
+            (m1, m2) = try_broadcast_either(self, other)?;
+            m1_ref = &m1;
+            m2_ref = &m2;
+        }
+
+        if let (Some(m2d1), Some(m2d2)) = (&m1_ref.matrix2d, &m2_ref.matrix2d){
+            let m2d_out = m2d1.try_add(m2d2)?;
+            Ok(Matrix::new_with_matrix2d(m1_ref.dims.to_owned(), m2d_out))
+        }
+        else if let (Some(sub1), Some(sub2)) = (&m1_ref.sub_matrices, &m2_ref.sub_matrices){
             let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_add(s2)).collect::<Result<Vec<Matrix<T>>, OperationError>>()?;
-            Ok(Matrix::new_with_sub_matrices(self.dims.to_owned(), sub_out))
+            Ok(Matrix::new_with_sub_matrices(m1_ref.dims.to_owned(), sub_out))
         }
         else {
             Err(MatrixCompositionError)
@@ -341,10 +456,17 @@ impl TryOperation1 for MatrixType{
         }
     }
 
-    fn try_reshape(&self, dim: Vec<usize>) -> Result<Self::Output, OperationError> {
+    fn try_reshape(&self, dim: &Vec<usize>) -> Result<Self::Output, OperationError> {
         match &self {
             IntMatrix(matrix) => Ok(IntMatrix(matrix.try_reshape(dim)?)),
             FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_reshape(dim)?))
+        }
+    }
+
+    fn try_broadcast(&self, dim: &Vec<usize>) -> Result<Self::Output, OperationError> {
+        match &self {
+            IntMatrix(matrix) => Ok(IntMatrix(matrix.try_broadcast(dim)?)),
+            FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_broadcast(dim)?))
         }
     }
 }
