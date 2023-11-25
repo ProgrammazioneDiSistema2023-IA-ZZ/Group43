@@ -1,106 +1,107 @@
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::collections::hash_map::Entry;
+use std::cell::{RefCell};
+use std::collections::{HashMap};
 use std::fmt::{Display, Formatter};
-use std::rc::Rc;
+use std::rc::{Rc};
 use std::string::String;
-use crate::onnx::onnx_node::{AddNeighbourConnection, OnnxNode};
-use crate::onnx::temporary_node::{FromRef, TmpOnnxNode};
-// use crate::onnx::onnx_node::{OnnxNode, FunctionNode, InputNode, AddOut};
-// use crate::onnx::onnx_node::OnnxNode::{Function, Input};
-use crate::parser::onnx_model::onnx_proto3::ModelProto;
+use crate::onnx::onnx_node::{FunctionNode, InputNode, HaveOut, HaveIn, OutputNode, InitNode, Name};
+use crate::parser::onnx_model::onnx_proto3::{ModelProto};
 
 #[derive(Debug)]
 pub struct OnnxGraph{
-    root_node: Rc<RefCell<OnnxNode>>,
-    secondary_roots: Vec<Rc<OnnxNode>>
+    root_node: Rc<RefCell<InputNode>>,
+    secondaries_roots: Vec<Rc<RefCell<FunctionNode>>>,
+    // pub fun_nodes: Vec<Rc<RefCell<FunctionNode>>>
 }
 
 impl Display for OnnxGraph{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Onnx graph:\n{}", self.root_node.borrow())
+        write!(f, "Onnx graph:\n{:?}\n{:?}\n{}", self.root_node.borrow(), self.secondaries_roots, self.secondaries_roots.len())
     }
 }
+
+pub trait AddEdge{
+    fn add_directional_edge(base_node: Rc<RefCell<dyn HaveOut>>, destination_node: Rc<RefCell<dyn HaveIn>>) -> (){
+        base_node.borrow_mut().add_out(destination_node.clone());
+        destination_node.borrow_mut().add_in(Rc::downgrade(&base_node));
+    }
+}
+
+impl AddEdge for OnnxGraph{}
 
 impl From<ModelProto> for OnnxGraph{
     fn from(model: ModelProto) -> Self {
-        let fun_nodes: Vec<Rc<RefCell<OnnxNode>>> = model.graph.node.iter()
-            .map(|n| Rc::new(RefCell::new(OnnxNode::from(n))))
+        //Initialize nodes
+        let fun_nodes: Vec<Rc<RefCell<FunctionNode>>> = model.graph.node.iter()
+            .map(|n| Rc::new(RefCell::new(FunctionNode::from(n))))
             .collect();
-        let init_nodes: HashMap<&String, Rc<RefCell<OnnxNode>>> = model.graph.initializer.iter()
-            .map(|n| (&n.name, Rc::new(RefCell::new(OnnxNode::from(n)))))
+        let init_nodes: HashMap<&String, Rc<RefCell<InitNode>>> = model.graph.initializer.iter()
+            .map(|n| (&n.name, Rc::new(RefCell::new(InitNode::from(n)))))
             .collect();
-        let input_nodes: HashMap<&String, Rc<RefCell<OnnxNode>>> = model.graph.input.iter()
-            .map(|n| (&n.name, Rc::new(RefCell::new(OnnxNode::from(n)))))
+        let input_nodes: HashMap<&String, Rc<RefCell<InputNode>>> = model.graph.input.iter()
+            .map(|n| (&n.name, Rc::new(RefCell::new(InputNode::from(n)))))
             .collect();
-        let output_nodes: HashMap<&String, Rc<RefCell<OnnxNode>>> = model.graph.output.iter()
-            .map(|n| (&n.name, Rc::new(RefCell::new(OnnxNode::from(n)))))
+        let output_nodes: HashMap<&String, Rc<RefCell<OutputNode>>> = model.graph.output.iter()
+            .map(|n| (&n.name, Rc::new(RefCell::new(OutputNode::from(n)))))
             .collect();
 
-        println!("Function nodes");
-        for node in fun_nodes.iter(){
-            println!("{:?}", node.borrow())
-        }
-        println!("Initalizer nodes");
-        for node in init_nodes.iter(){
-            println!("{:?}", node.1.borrow())
-        }
-        println!("Input nodes");
-        for node in input_nodes.iter(){
-            println!("{:?}", node.1.borrow())
-        }
-        println!("Output nodes");
-        for node in output_nodes.iter(){
-            println!("{:?}", node.1.borrow())
-        }
-
-        // let all_possible_inputs = input_nodes.iter().chain(fun_nodes.iter()).chain(init_nodes.iter()).collect::<HashMap<&&String, &Rc<RefCell<OnnxNode>>>>();
-        // let all_possible_outputs = fun_nodes.iter().chain(output_nodes.iter()).collect::<HashMap<&&String, &Rc<RefCell<OnnxNode>>>>();
-        //
-        // let a = input_nodes.values().collect::<Vec<&Rc<RefCell<OnnxNode>>>>();
-        for (i, f_node) in fun_nodes.iter().enumerate(){
-            for in_node_name in f_node.input.iter(){
-                // let base_node = input_nodes.get(in_node_name)
-                //     .or_else(|| fun_nodes.get(in_node_name)
-                //         .or_else(|| init_nodes.get(in_node_name)))
-                //     .expect(format!("Base node {} not found", in_node_name).as_str());
-                // let destination_node = output_nodes.get(&f_node.name)
-                //     .or_else(|| fun_nodes.get(&f_node.name))
-                //     .expect(format!("Destination node {} not found", f_node.name).as_str());
-                let base_node = vec![input_nodes.get(in_node_name)
-                    .or_else(|| init_nodes.get(in_node_name))
-                    .expect(format!("Base node {} not found", in_node_name).as_str())];
-                //OnnxNode::add_connection(base_node.clone(), destination_node.clone());
+        //Closure that create edges between a node and his inputs
+        let create_edges = |inputs_names: Vec<String>, destination_node: Rc<RefCell<dyn HaveIn>>| {
+            for input_name in inputs_names.iter() {
+                let base_node: Rc<RefCell<dyn HaveOut>> = if let Some(node) = input_nodes.get(input_name) {
+                    node.clone()
+                } else if let Some(node) = init_nodes.get(input_name) {
+                    node.clone()
+                } else if let Some(node) = fun_nodes.iter().find(|node| node.borrow().get_outputs_name().contains(input_name)) {
+                    node.clone()
+                } else {
+                    panic!("No base found for connection: {}", input_name)
+                };
+                OnnxGraph::add_directional_edge(base_node, destination_node.clone());
             }
+        };
+
+        //Create edges from nodes to all functional nodes
+        for f_node in fun_nodes.iter(){
+            let inputs_names = f_node.borrow().get_inputs_name().to_owned();
+            create_edges(inputs_names, f_node.clone());
         }
 
-        // OnnxNode::add_connection(input_nodes[&"Input3".to_string()].clone(), fun_nodes[&"Convolution28".to_string()].clone());
-        let root = input_nodes[&"Input3".to_string()].clone();
-        let a = root.borrow().to_string();
+        //Create edges from nodes to all output nodes
+        for out_node in output_nodes.iter(){
+            let inputs_names = vec![out_node.1.borrow().get_name().to_owned()];
+            create_edges(inputs_names, out_node.1.clone());
+        }
+
+        //Define root node
+        let root_node = match input_nodes.len() {
+            1 => input_nodes.iter().nth(0).unwrap().1.clone(),
+            _ => panic!("Number of input nodes not supported")
+        };
+
+        //Define vec of secondaries root that not start from the input
+        let secondaries_roots = fun_nodes.iter().filter_map(|node| {
+            if node.borrow().get_inputs().iter().any(|n| {
+                match n.upgrade().unwrap().borrow().as_any().downcast_ref::<FunctionNode>() {
+                    Some(i) => return true,
+                    None => {}
+                };
+                match n.upgrade().unwrap().borrow().as_any().downcast_ref::<InputNode>() {
+                    Some(i) => true,
+                    None => false
+                }
+            })
+            {
+                None
+            }
+            else {
+                Some(node.clone())
+            }
+        }).collect();
+
         OnnxGraph{
-            root_node: root,
-            secondary_roots: Vec::default()
+            root_node: root_node,
+            secondaries_roots: secondaries_roots,
+            // fun_nodes: fun_nodes
         }
     }
 }
-
-// impl From<ModelProto> for OnnxGraph{
-//     fn from(model: ModelProto) -> Self {
-//         fn compute_graph(model: &ModelProto, current_node: &mut OnnxNode, outputs_names: HashSet<&String>) {
-//             for node in model.graph.node.iter() {
-//                 for input in node.input.iter(){
-//                     if outputs_names.contains(input){
-//                         current_node.add_output(OnnxNode::new(& node.name));
-//                     }
-//                 }
-//             }
-//         };
-//         let mut root_node = OnnxNode::new(& model.graph.input[0].name);
-//         root_node.add_output(OnnxNode::new(& model.graph.node[0].name));
-//         compute_graph(&model, &mut *root_node.outputs[0].borrow_mut(), model.graph.node[0].output.iter().collect());
-//         OnnxGraph{
-//             root_node: root_node,
-//             secondary_roots: Vec::default()
-//         }
-//     }
-// }
