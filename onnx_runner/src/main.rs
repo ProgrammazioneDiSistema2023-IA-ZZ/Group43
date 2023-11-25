@@ -64,7 +64,8 @@ fn test_matrix() {
     let m = matrix_f.try_relu();
     println!("{:?}", m);
     let m2 = m.unwrap();
-    let m2 = m2.try_reshape(vec![2,100]);
+    let new_size = vec![2,100];
+    let m2 = m2.try_reshape(&new_size);
     println!("{:?}", m2.unwrap());
 }
 
@@ -85,13 +86,17 @@ fn test_matrix() {
 // }
 
 fn test_broadcast(){
-    fn add<T: Debug + Add<Output=T> + Copy>(m1: &Matrix<T>, m2: &Matrix<T>){
+    fn add<T: Copy + Add<Output = T> + Default + PartialOrd + Debug>(m1: &Matrix<T>, m2: &Matrix<T>){
         println!("M1 => {:?}", m1);
         println!("M2 => {:?}", m2);
         let res = m1.try_add(&m2).unwrap();
         println!("RES => {:?}", res);
     }
-    let m1 = Matrix::new(vec![2,3], Some(vec![1,2,3,4,5,6]));
-    let m2 = Matrix::new(vec![2,3], Some(vec![2,2,2,2,2,2]));
+    let m1 = Matrix::new(vec![2,1], Some(vec![1,2]));
+    let m2 = Matrix::new(vec![1,3], Some(vec![2,2,2]));
     add(&m1, &m2);
+    // let dim = vec![2,2,3];
+    // println!("{:?}", m1);
+    // let res = m1.try_broadcast(&dim).unwrap();
+    // println!("{:?}", res);
 }
