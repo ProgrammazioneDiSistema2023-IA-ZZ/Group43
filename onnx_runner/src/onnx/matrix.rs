@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter, write};
-use std::ops::Add;
+use std::ops::{Add, Mul};
 use crate::onnx::matrix::MatrixType::{FloatMatrix, IntMatrix};
 use crate::onnx::matrix::OperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError};
 use crate::parser::onnx_model::onnx_proto3::{TensorProto, ValueInfoProto};
@@ -57,6 +57,8 @@ pub trait TryOperation2<T>{
     type Output;
 
     fn try_add(&self, other: T) -> Result<Self::Output, OperationError>;
+
+    fn try_matmul(&self, other: T) -> Result<Self::Output, OperationError>;
 }
 
 #[derive(Debug, Clone)]
@@ -138,7 +140,7 @@ impl<T: Copy + Add<Output = T> + Default + PartialOrd> TryOperation1 for Matrix2
     }
 }
 
-impl<T: Copy + Add<Output = T>> TryOperation2<&Matrix2D<T>> for Matrix2D<T>{
+impl<T: Copy + Add<Output = T> + Default + Mul<Output = T>> TryOperation2<&Matrix2D<T>> for Matrix2D<T>{
     type Output = Matrix2D<T>;
 
     fn try_add(&self, other: &Matrix2D<T>) -> Result<Matrix2D<T>, OperationError> {
@@ -151,6 +153,31 @@ impl<T: Copy + Add<Output = T>> TryOperation2<&Matrix2D<T>> for Matrix2D<T>{
         Ok(Matrix2D::new(
             self.rows,
             self.cols,
+            Some(data_out)
+        ))
+    }
+
+    fn try_matmul(&self, other: &Matrix2D<T>) -> Result<Self::Output, OperationError> {
+        if self.cols != other.rows{
+            return Err(MismatchSizeError);
+        }
+        let data1 = self.get_data_or_error()?;
+        let data2 = other.get_data_or_error()?;
+        let mut data_out = Vec::new();
+        for n in 0..self.rows{
+            let row_cum_id = n * self.cols;
+            for m in 0..other.cols{
+                let mut sum = T::default();
+                for k in 0..self.cols{
+                    sum = sum + data1[row_cum_id + k] * data2[k * other.cols + m];
+                }
+                //out[n,m] = sum
+                data_out.push(sum);
+            }
+        }
+        Ok(Matrix2D::new(
+            self.rows,
+            other.cols,
             Some(data_out)
         ))
     }
@@ -339,7 +366,7 @@ impl<T: Copy + Add<Output = T> + Default + PartialOrd> TryOperation1 for Matrix<
     }
 }
 
-impl<T: Copy + Add<Output = T> + Default + PartialOrd> TryOperation2<&Matrix<T>> for Matrix<T>{
+impl<T: Copy + Add<Output = T> + Default + PartialOrd + Mul<Output = T>> TryOperation2<&Matrix<T>> for Matrix<T>{
     type Output = Matrix<T>;
 
     fn try_add(&self, other: &Matrix<T>) -> Result<Matrix<T>, OperationError> {
@@ -378,6 +405,23 @@ impl<T: Copy + Add<Output = T> + Default + PartialOrd> TryOperation2<&Matrix<T>>
         }
         else if let (Some(sub1), Some(sub2)) = (&m1_ref.sub_matrices, &m2_ref.sub_matrices){
             let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_add(s2)).collect::<Result<Vec<Matrix<T>>, OperationError>>()?;
+            Ok(Matrix::new_with_sub_matrices(m1_ref.dims.to_owned(), sub_out))
+        }
+        else {
+            Err(MatrixCompositionError)
+        }
+    }
+
+    fn try_matmul(&self, other: &Matrix<T>) -> Result<Self::Output, OperationError> {
+        let mut m1_ref = self;
+        let mut m2_ref = other;
+
+        if let (Some(m2d1), Some(m2d2)) = (&m1_ref.matrix2d, &m2_ref.matrix2d){
+            let m2d_out = m2d1.try_matmul(m2d2)?;
+            Ok(Matrix::new_with_matrix2d(m1_ref.dims.to_owned(), m2d_out))
+        }
+        else if let (Some(sub1), Some(sub2)) = (&m1_ref.sub_matrices, &m2_ref.sub_matrices){
+            let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_matmul(s2)).collect::<Result<Vec<Matrix<T>>, OperationError>>()?;
             Ok(Matrix::new_with_sub_matrices(m1_ref.dims.to_owned(), sub_out))
         }
         else {
@@ -486,6 +530,23 @@ impl TryOperation2<&Self> for MatrixType {
                 match other {
                     IntMatrix(_) => Err(OperationError::MismatchSizeError),
                     FloatMatrix(other_matrix) => Ok(FloatMatrix(matrix.try_add(other_matrix)?))
+                }
+            }
+        }
+    }
+
+    fn try_matmul(&self, other: &Self) -> Result<Self::Output, OperationError> {
+        match &self {
+            IntMatrix(matrix) => {
+                match other {
+                    IntMatrix(other_matrix) => Ok(IntMatrix(matrix.try_matmul(other_matrix)?)),
+                    FloatMatrix(_) => Err(OperationError::MismatchTypeError)
+                }
+            },
+            FloatMatrix(matrix) => {
+                match other {
+                    IntMatrix(_) => Err(OperationError::MismatchSizeError),
+                    FloatMatrix(other_matrix) => Ok(FloatMatrix(matrix.try_matmul(other_matrix)?))
                 }
             }
         }
