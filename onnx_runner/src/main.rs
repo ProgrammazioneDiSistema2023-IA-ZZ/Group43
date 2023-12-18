@@ -65,7 +65,7 @@ fn test_matrix() {
     println!("{:?}", m);
     let m2 = m.unwrap();
     let new_size = vec![2,100];
-    let m2 = m2.try_reshape(&new_size);
+    let m2 = m2.try_reshape(&new_size, None);
     println!("{:?}", m2.unwrap());
 }
 
@@ -117,9 +117,19 @@ fn test_broadcast() {
     fn maxpool<T: Copy + Add<Output=T> + Default + PartialOrd + Debug + Mul<Output=T>>(m1: &Matrix<T>) {
         println!("MAXPOOL");
         println!("M1 => {:?}", m1);
-        let res = m1.try_max_pool(&vec![1,2], &None, &None, &None).unwrap();
+        let res = m1.try_max_pool(&vec![1,2], None, None, None, None, None, None).unwrap();
         println!("RES => {:?}", res);
     }
     let m7 = Matrix::new(vec![2, 3], Some(vec![1, 0, 2, 0, 3, -1]));
     maxpool(&m7);
+    fn conv<T: Copy + Add<Output=T> + Default + PartialOrd + Debug + Mul<Output=T>>(m1: &Matrix<T>, m2: &Matrix<T>) {
+        println!("CONV");
+        println!("M1 => {:?}", m1);
+        println!("M2 => {:?}", m2);
+        let res = m1.try_conv(&m2, &vec![2, 2], Some(&vec![2,2]), None, Some(&vec![1,1,1,1]), None, None).unwrap();
+        println!("RES => {:?}", res);
+    }
+    let m8 = Matrix::new(vec![3, 3], Some(vec![1, 0, 1,1,5,-1,3,2,0]));
+    let m9 = Matrix::new(vec![2, 2], Some(vec![1, 0, 0, 1]));
+    conv(&m8, &m9);
 }
