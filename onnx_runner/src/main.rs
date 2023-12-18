@@ -9,7 +9,7 @@ use onnx_runner::onnx::onnx_graph::OnnxGraph;
 fn main() {
     println!("Welcome to the onnx runner!");
     // test_parser();
-    //test_onnx();
+    test_onnx();
     // test_tmp();
     // test_matrix();
     //verify_op();
@@ -104,7 +104,7 @@ fn test_broadcast() {
         println!("MATMUL");
         println!("M1 => {:?}", m1);
         println!("M2 => {:?}", m2);
-        let res = m1.try_matmul(&m2).unwrap();
+        let res = m1.try_mat_mul(&m2).unwrap();
         println!("RES => {:?}", res);
     }
     let m3 = Matrix::new(vec![2, 3], Some(vec![1, 0, 2, 0, 3, -1]));
@@ -114,4 +114,12 @@ fn test_broadcast() {
     let m6 = Matrix::new(vec![3, 2], Some(vec![7,1,1,0,0,4]));
     mul(&m5, &m6);
     // mul(&m4, &m5);
+    fn maxpool<T: Copy + Add<Output=T> + Default + PartialOrd + Debug + Mul<Output=T>>(m1: &Matrix<T>) {
+        println!("MAXPOOL");
+        println!("M1 => {:?}", m1);
+        let res = m1.try_max_pool(&vec![1,2], &None, &None, &None).unwrap();
+        println!("RES => {:?}", res);
+    }
+    let m7 = Matrix::new(vec![2, 3], Some(vec![1, 0, 2, 0, 3, -1]));
+    maxpool(&m7);
 }
