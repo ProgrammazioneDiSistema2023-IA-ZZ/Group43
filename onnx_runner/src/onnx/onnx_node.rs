@@ -2,9 +2,9 @@ use std::any::Any;
 use std::cell::{RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::{Rc, Weak};
-use crate::onnx::matrix::{Data, Matrix, MatrixOperationError, MatrixType};
+use crate::onnx::matrix::{Data, Matrix, MatrixOperationError, MatrixType, TryOperation1, TryOperation1Attributes, TryOperation2};
 use crate::onnx::matrix::MatrixOperationError::MismatchSizeError;
-use crate::parser::onnx_model::onnx_proto3::{NodeProto, TensorProto, ValueInfoProto};
+use crate::parser::onnx_model::onnx_proto3::{AttributeProto, NodeProto, TensorProto, ValueInfoProto};
 
 //Common trait//////////////////////////////////////////////////////////////////////////////
 pub trait HaveOut: Debug{
@@ -44,13 +44,8 @@ impl InputNode {
         }
     }
 
-    fn try_load_data(&mut self, data: MatrixType) -> Result<(), MatrixOperationError>{
-        let expected_dims = self.data.get_dims();
-        let provided_dims = data.get_dims();
-        if expected_dims.len() != provided_dims.len() || expected_dims.iter().zip(provided_dims.iter()).any(|(d1, d2)| d1 != d2){
-            Err(MismatchSizeError)
-        }
-        self.data = data;
+    pub fn try_load_data(&mut self, data: MatrixType) -> Result<(), MatrixOperationError>{
+        self.data = data.try_reshape(&self.data.get_dims(), None)?;
         Ok(())
     }
 }
@@ -96,12 +91,14 @@ pub struct FunctionNode{
     op_type: String,
     inputs_name: Vec<String>,
     outputs_name: Vec<String>,
-    data: Option<MatrixType>
+    data: Option<MatrixType>,
+    pub op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
+    attributes: Vec<AttributeProto>,
 }
 
 
 impl FunctionNode {
-    fn new(name: String, op_type: String, inputs_name: Vec<String>, outputs_name: Vec<String>, data: Option<MatrixType>) -> Self{
+    fn new(name: String, op_type: String, inputs_name: Vec<String>, outputs_name: Vec<String>, data: Option<MatrixType>, op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>, attributes: Vec<AttributeProto>) -> Self{
         FunctionNode{
             node_name: name,
             inputs: Vec::default(),
@@ -109,7 +106,9 @@ impl FunctionNode {
             op_type: op_type,
             inputs_name: inputs_name,
             outputs_name: outputs_name,
-            data: data
+            data: data,
+            op1: op1,
+            attributes: attributes
         }
     }
 
@@ -123,6 +122,10 @@ impl FunctionNode {
 
     pub fn get_operation_name(&self) -> &String {
         &self.op_type
+    }
+
+    pub fn calculate(&self, m: MatrixType) -> Result<MatrixType, MatrixOperationError>{
+        self.op1.unwrap()(&m, &self.attributes)
     }
 }
 
@@ -160,14 +163,22 @@ impl Name for FunctionNode {
     }
 }
 
+// Option<fn(&MatrixType) -> Result<MatrixType, MatrixOperationError>>
+
 impl From<&NodeProto> for FunctionNode {
     fn from(node_proto: &NodeProto) -> Self {
+        let mut op: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>> = None;
+        if node_proto.op_type == "MaxPool"{
+            op = Some(MatrixType::try_max_pool_attributes);
+        }
         FunctionNode::new(
             format!("{}_{}",node_proto.op_type, node_proto.name),
             node_proto.op_type.to_owned(),
             node_proto.input.to_owned(),
             node_proto.output.to_owned(),
-            None
+            None,
+            op,
+            node_proto.attribute.clone()
         )
     }
 }

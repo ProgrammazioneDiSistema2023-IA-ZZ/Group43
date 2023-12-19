@@ -3,14 +3,14 @@ use std::collections::{HashMap};
 use std::fmt::{Display, Formatter};
 use std::rc::{Rc};
 use std::string::String;
-use crate::onnx::matrix::MatrixType;
+use crate::onnx::matrix::{MatrixOperationError, MatrixType};
 use crate::onnx::onnx_node::{FunctionNode, InputNode, HaveOut, HaveIn, OutputNode, InitNode, Name};
 use crate::parser::onnx_model::onnx_proto3::{ModelProto};
 
 #[derive(Debug)]
 pub struct OnnxGraph{
-    root_node: Rc<RefCell<InputNode>>,
-    secondaries_roots: Vec<Rc<RefCell<FunctionNode>>>,
+    pub root_node: Rc<RefCell<InputNode>>,
+    pub secondaries_roots: Vec<Rc<RefCell<FunctionNode>>>,
     pub fun_nodes: Vec<Rc<RefCell<FunctionNode>>>,
     pub init_nodes: Vec<Rc<RefCell<InitNode>>>,
     pub input_nodes: Vec<Rc<RefCell<InputNode>>>,
@@ -18,8 +18,8 @@ pub struct OnnxGraph{
 }
 
 impl OnnxGraph {
-    fn load_data(data: MatrixType){
-
+    pub fn try_load_data(&self, data: MatrixType) -> Result<(), MatrixOperationError> {
+        self.root_node.borrow_mut().try_load_data(data)
     }
 }
 

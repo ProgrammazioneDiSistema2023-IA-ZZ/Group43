@@ -2,18 +2,23 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::{Add, Mul};
 use std::string::String;
-use onnx_runner::onnx::matrix::{Matrix, MatrixType, Numeric, TryOperation1, TryOperation2};
+use image::DynamicImage::ImageLuma8;
+use onnx_runner::onnx::matrix::{Matrix, MatrixOperationError, MatrixType, Numeric, TryOperation1, TryOperation2};
 use onnx_runner::parser::parser::Parser;
 use onnx_runner::onnx::onnx_graph::OnnxGraph;
+use image::io::Reader as ImageReader;
+use onnx_runner::onnx::matrix::MatrixOperationError::MismatchTypeError;
 
 fn main() {
     println!("Welcome to the onnx runner!");
     // test_parser();
-    test_onnx();
+    //test_onnx();
     // test_tmp();
     // test_matrix();
     //verify_op();
     // test_broadcast();
+    // test_img();
+    test_inference().unwrap();
 }
 
 fn test_parser() {
@@ -134,4 +139,38 @@ fn test_broadcast() {
     let m8 = Matrix::new(vec![3, 3], Some(vec![1, 0, 1,1,5,-1,3,2,0]));
     let m9 = Matrix::new(vec![2, 2], Some(vec![1, 0, 0, 1]));
     conv(&m8, &m9);
+}
+
+fn test_img(){
+    let img = ImageReader::open("two.png").unwrap().decode().unwrap();
+    println!("{:?}", img);
+    if let ImageLuma8(luma) = img{
+        let data = luma.iter().map(|p| (*p as f32) / 255.0).collect::<Vec<f32>>();
+        println!("{:?}", data);
+    }
+}
+
+fn test_inference() -> Result<(), MatrixOperationError>{
+    let onnx_file = "mnist-12";
+    let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
+    let onnx = OnnxGraph::from(onnx_model);
+
+    let img = ImageReader::open("two.png").unwrap().decode().unwrap();
+    let input_matrix;
+    match img {
+        ImageLuma8(ref luma) => {
+            let input_data = luma.iter().map(|p| (*p as f32) / 255.0).collect::<Vec<f32>>();
+            input_matrix = MatrixType::new(vec![img.height() as usize, img.width() as usize], None, Some(input_data));
+        },
+        _ => return Err(MismatchTypeError)
+    }
+    onnx.try_load_data(input_matrix)?;
+    println!("{:?}", onnx.root_node.borrow().data);
+
+    let tmp = MatrixType::new(vec![2, 4], Some(vec![2,3,1,1,1,2,4,2]), None);
+    println!("EASY MAXPOOL: {:?}", tmp.try_max_pool(&vec![2,2], Some(&vec![2,2]), None, None, None, None, None));
+    println!("{:?}", onnx.fun_nodes[3].borrow().op1.is_some());
+    let res = onnx.fun_nodes[3].borrow().calculate(tmp)?;
+    println!("{:?}", res);
+    Ok(())
 }

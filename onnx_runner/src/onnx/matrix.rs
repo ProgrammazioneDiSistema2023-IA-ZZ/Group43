@@ -2,8 +2,8 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter, write};
 use std::ops::{Add, Mul};
 use crate::onnx::matrix::MatrixType::{FloatMatrix, IntMatrix};
-use crate::onnx::matrix::MatrixOperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError, MissingFieldError};
-use crate::parser::onnx_model::onnx_proto3::{TensorProto, ValueInfoProto};
+use crate::onnx::matrix::MatrixOperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError, MissingFieldError, InvalidArgumentError};
+use crate::parser::onnx_model::onnx_proto3::{AttributeProto, TensorProto, ValueInfoProto};
 use crate::parser::onnx_model::onnx_proto3::tensor_proto::DataType;
 use crate::parser::onnx_model::onnx_proto3::tensor_shape_proto::dimension::Value::{DimParam, DimValue};
 use crate::parser::onnx_model::onnx_proto3::type_proto::Value;
@@ -17,6 +17,7 @@ pub enum MatrixOperationError {
     MismatchTypeError,
     NotImplementedError,
     MissingFieldError,
+    InvalidArgumentError,
 }
 
 impl Error for MatrixOperationError {}
@@ -31,6 +32,7 @@ impl Display for MatrixOperationError {
             MismatchTypeError => write!(f, "The matrices have wrong types"),
             NotImplementedError => write!(f, "Operation not implemented"),
             MissingFieldError => write!(f, "Missing field"),
+            InvalidArgumentError => write!(f, "Invalid argument"),
         }
     }
 }
@@ -72,6 +74,24 @@ pub trait TryOperation2<T>{
     fn try_mat_mul(&self, other: T) -> Result<Self::Output, MatrixOperationError>;
 
     fn try_conv(&self, kernel: T, kernel_shape: &Vec<usize>, strides: Option<&Vec<usize>>, auto_pad: Option<&String>, pads: Option<&Vec<usize>>, group: Option<&usize>, dilations: Option<&Vec<usize>>) -> Result<Self::Output, MatrixOperationError>;
+}
+
+pub trait TryOperation1Attributes{
+    fn try_relu_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
+
+    fn try_max_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
+}
+
+pub trait TryOperation2Attributes<T>{
+    type Output;
+
+    fn try_add_attributes(&self, other: T, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
+
+    fn try_mat_mul_attributes(&self, other: T, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
+
+    fn try_conv_attributes(&self, kernel: T, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
+
+    fn try_reshape_attributes(&self, dim: T, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -308,10 +328,10 @@ impl<T: Numeric> Matrix<T> {
     pub fn new(dims: Vec<usize>, data: Option<Vec<T>>) -> Self{
         match dims.len() {
             1 => Matrix{
-                    dims: vec![1, dims[0]],
-                    matrix2d: Some(Matrix2D::new(1, dims[0], data)),
-                    sub_matrices: None
-                },
+                dims: vec![1, dims[0]],
+                matrix2d: Some(Matrix2D::new(1, dims[0], data)),
+                sub_matrices: None
+            },
             2 => {
                 let rows = dims[0];
                 let cols = dims[1];
@@ -694,6 +714,25 @@ pub enum MatrixType{
     FloatMatrix(Matrix<f32>)
 }
 
+impl MatrixType{
+    pub fn new(dims: Vec<usize>, ints: Option<Vec<i64>>, floats: Option<Vec<f32>>) -> Self{
+        if ints.is_some(){
+            IntMatrix(Matrix::new(dims, ints))
+        } else if floats.is_some(){
+            FloatMatrix(Matrix::new(dims, floats))
+        } else {
+            MatrixType::default()
+        }
+    }
+
+    pub fn get_dims(&self) -> Vec<usize> {
+        match &self {
+            IntMatrix(matrix) => matrix.get_dims(),
+            FloatMatrix(matrix) => matrix.get_dims()
+        }
+    }
+}
+
 impl Default for MatrixType {
     fn default() -> Self {
         MatrixType::IntMatrix(Matrix::default())
@@ -750,21 +789,6 @@ impl From<&ValueInfoProto> for MatrixType {
                 }
             },
             Err(_) => panic!("No valid data type")
-        }
-    }
-}
-
-impl<'a, T: Numeric> Data<'a, T> for MatrixType {
-    type Output = Vec<T>;
-
-    fn get_data_or_error(&'a self) -> Result<Self::Output, MatrixOperationError> {
-        Err(NotImplementedError)
-    }
-
-    fn get_dims(&self) -> Vec<usize> {
-        match &self {
-            IntMatrix(matrix) => matrix.get_dims(),
-            FloatMatrix(matrix) => matrix.get_dims()
         }
     }
 }
@@ -852,6 +876,108 @@ impl TryOperation2<&Self> for MatrixType {
                     FloatMatrix(kernel_matrix) => Ok(FloatMatrix(matrix.try_conv(kernel_matrix, kernel_shape, strides, auto_pad, pads, group, dilations)?))
                 }
             }
+        }
+    }
+}
+
+impl TryOperation1Attributes for MatrixType{
+    fn try_relu_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
+        self.try_relu()
+    }
+
+    fn try_max_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<Self, MatrixOperationError> {
+        let mut kernel_shape: Vec<usize> = Vec::new();
+        let mut strides: Option<Vec<usize>> = None;
+        let mut auto_pad: Option<String> = None;
+        let mut pads: Option<Vec<usize>> = None;
+        let mut ceil_mode: Option<usize> = None;
+        let mut dilations: Option<Vec<usize>> = None;
+        let mut storage_order: Option<usize> = None;
+        let mut haveInvalidArgument = false;
+        attributes.iter().for_each(|a| {
+            match a.name.as_str() {
+                "kernel_shape" => kernel_shape = a.ints.iter().map(|i| *i as usize).collect(),
+                "strides" => strides = Some(a.ints.iter().map(|i| *i as usize).collect()),
+                "auto_pad" => auto_pad = Some(String::from_utf8(a.s.to_owned()).unwrap()),
+                "pads" => pads = Some(a.ints.iter().map(|i| *i as usize).collect()),
+                "ceil_mode" => ceil_mode = Some((a.i as usize)),
+                "dilations" => dilations = Some(a.ints.iter().map(|i| *i as usize).collect()),
+                "storage_order" => storage_order = Some((a.i as usize)),
+                _ => haveInvalidArgument = true
+            }
+        });
+        if haveInvalidArgument{
+            return Err(InvalidArgumentError);
+        }
+        if kernel_shape.len() == 0{
+            Err(MissingFieldError)
+        } else {
+            self.try_max_pool(&kernel_shape, Option::from(&strides), Option::from(&auto_pad), Option::from(&pads), Option::from(&ceil_mode), Option::from(&dilations), Option::from(&storage_order))
+        }
+    }
+}
+
+impl TryOperation2Attributes<&Self> for MatrixType {
+    type Output = Self;
+
+    fn try_add_attributes(&self, other: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError> {
+        self.try_add(other)
+    }
+
+    fn try_mat_mul_attributes(&self, other: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError> {
+        self.try_mat_mul(other)
+    }
+
+    fn try_conv_attributes(&self, kernel: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError> {
+        let mut kernel_shape: Vec<usize> = Vec::new();
+        let mut strides: Option<Vec<usize>> = None;
+        let mut auto_pad: Option<String> = None;
+        let mut pads: Option<Vec<usize>> = None;
+        let mut group: Option<usize> = None;
+        let mut dilations: Option<Vec<usize>> = None;
+        let mut have_invalid_argument = false;
+        attributes.iter().for_each(|a| {
+            match a.name.as_str() {
+                "kernel_shape" => kernel_shape = a.ints.iter().map(|i| *i as usize).collect(),
+                "strides" => strides = Some(a.ints.iter().map(|i| *i as usize).collect()),
+                "auto_pad" => auto_pad = Some(String::from_utf8(a.s.to_owned()).unwrap()),
+                "pads" => pads = Some(a.ints.iter().map(|i| *i as usize).collect()),
+                "group" => group = Some((a.i as usize)),
+                "dilations" => dilations = Some(a.ints.iter().map(|i| *i as usize).collect()),
+                _ => have_invalid_argument = true
+            }
+        });
+        if have_invalid_argument {
+            return Err(InvalidArgumentError);
+        }
+        if kernel_shape.len() == 0{
+            Err(MissingFieldError)
+        } else {
+            self.try_conv(kernel, &kernel_shape, Option::from(&strides), Option::from(&auto_pad), Option::from(&pads), Option::from(&group), Option::from(&dilations))
+        }
+    }
+
+    fn try_reshape_attributes(&self, dim: &Self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
+        let mut allowzero: Option<usize> = None;
+        let mut have_invalid_argument = false;
+        attributes.iter().for_each(|a| {
+            match a.name.as_str() {
+                "allowzero" => allowzero = Some((a.i as usize)),
+                _ => have_invalid_argument = true
+            }
+        });
+        if have_invalid_argument {
+            return Err(InvalidArgumentError);
+        }
+        match dim {
+            IntMatrix(d) => {
+                if d.dims.len() != 2 || d.dims[0] != 1{
+                    return Err(MismatchSizeError)
+                }
+                let new_dim = d.get_data_or_error()?.iter().map(|dd| *dd as usize).collect();
+                self.try_reshape(&new_dim, Option::from(&allowzero))
+            },
+            FloatMatrix(_) => Err(MismatchTypeError)
         }
     }
 }
