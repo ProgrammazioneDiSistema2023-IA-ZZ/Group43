@@ -2,6 +2,8 @@ use std::any::Any;
 use std::cell::{RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::{Rc, Weak};
+use crate::onnx::matrix::{Data, Matrix, MatrixOperationError, MatrixType};
+use crate::onnx::matrix::MatrixOperationError::MismatchSizeError;
 use crate::parser::onnx_model::onnx_proto3::{NodeProto, TensorProto, ValueInfoProto};
 
 //Common trait//////////////////////////////////////////////////////////////////////////////
@@ -30,14 +32,26 @@ pub trait Name{
 pub struct InputNode {
     node_name: String,
     outputs: Vec<Rc<RefCell<dyn HaveIn>>>,
+    pub data: MatrixType
 }
 
 impl InputNode {
-    fn new(name: String) -> Self{
+    fn new(name: String, data: MatrixType) -> Self{
         InputNode{
             node_name: name,
-            outputs: Vec::default()
+            outputs: Vec::default(),
+            data: data
         }
+    }
+
+    fn try_load_data(&mut self, data: MatrixType) -> Result<(), MatrixOperationError>{
+        let expected_dims = self.data.get_dims();
+        let provided_dims = data.get_dims();
+        if expected_dims.len() != provided_dims.len() || expected_dims.iter().zip(provided_dims.iter()).any(|(d1, d2)| d1 != d2){
+            Err(MismatchSizeError)
+        }
+        self.data = data;
+        Ok(())
     }
 }
 
@@ -63,7 +77,7 @@ impl Name for InputNode {
 
 impl From<&ValueInfoProto> for InputNode {
     fn from(value_proto: &ValueInfoProto) -> Self {
-        InputNode::new(value_proto.name.to_owned())
+        InputNode::new(value_proto.name.to_owned(), MatrixType::from(value_proto))
     }
 }
 
@@ -81,19 +95,21 @@ pub struct FunctionNode{
     outputs: Vec<Rc<RefCell<dyn HaveIn>>>,
     op_type: String,
     inputs_name: Vec<String>,
-    outputs_name: Vec<String>
+    outputs_name: Vec<String>,
+    data: Option<MatrixType>
 }
 
 
 impl FunctionNode {
-    fn new(name: String, op_type: String, inputs_name: Vec<String>, outputs_name: Vec<String>) -> Self{
+    fn new(name: String, op_type: String, inputs_name: Vec<String>, outputs_name: Vec<String>, data: Option<MatrixType>) -> Self{
         FunctionNode{
             node_name: name,
             inputs: Vec::default(),
             outputs: Vec::default(),
             op_type: op_type,
             inputs_name: inputs_name,
-            outputs_name: outputs_name
+            outputs_name: outputs_name,
+            data: data
         }
     }
 
@@ -150,7 +166,8 @@ impl From<&NodeProto> for FunctionNode {
             format!("{}_{}",node_proto.op_type, node_proto.name),
             node_proto.op_type.to_owned(),
             node_proto.input.to_owned(),
-            node_proto.output.to_owned()
+            node_proto.output.to_owned(),
+            None
         )
     }
 }
@@ -166,13 +183,15 @@ impl Display for FunctionNode {
 pub struct InitNode {
     node_name: String,
     outputs: Vec<Rc<RefCell<dyn HaveIn>>>,
+    pub data: MatrixType
 }
 
 impl InitNode {
-    fn new(name: String) -> Self{
+    fn new(name: String, data: MatrixType) -> Self{
         InitNode{
             node_name: name,
-            outputs: Vec::default()
+            outputs: Vec::default(),
+            data: data
         }
     }
 }
@@ -199,7 +218,7 @@ impl Name for InitNode {
 
 impl From<&TensorProto> for InitNode {
     fn from(tensor_proto: &TensorProto) -> Self {
-        InitNode::new(tensor_proto.name.to_owned())
+        InitNode::new(tensor_proto.name.to_owned(), MatrixType::from(tensor_proto))
     }
 }
 
@@ -214,13 +233,15 @@ impl Display for InitNode {
 pub struct OutputNode {
     node_name: String,
     inputs: Vec<Weak<RefCell<dyn HaveOut>>>,
+    pub data: MatrixType
 }
 
 impl OutputNode {
-    fn new(name: String) -> Self{
+    fn new(name: String, data: MatrixType) -> Self{
         OutputNode{
             node_name: name,
-            inputs: Vec::default()
+            inputs: Vec::default(),
+            data: data
         }
     }
 }
@@ -247,7 +268,7 @@ impl Name for OutputNode {
 
 impl From<&ValueInfoProto> for OutputNode {
     fn from(value_proto: &ValueInfoProto) -> Self {
-        OutputNode::new(value_proto.name.to_owned())
+        OutputNode::new(value_proto.name.to_owned(), MatrixType::from(value_proto))
     }
 }
 

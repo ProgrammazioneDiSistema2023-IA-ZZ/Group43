@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::{Add, Mul};
 use std::string::String;
-use onnx_runner::onnx::matrix::{Matrix, MatrixType, TryOperation1, TryOperation2};
+use onnx_runner::onnx::matrix::{Matrix, MatrixType, Numeric, TryOperation1, TryOperation2};
 use onnx_runner::parser::parser::Parser;
 use onnx_runner::onnx::onnx_graph::OnnxGraph;
 
@@ -13,7 +13,7 @@ fn main() {
     // test_tmp();
     // test_matrix();
     //verify_op();
-    test_broadcast();
+    // test_broadcast();
 }
 
 fn test_parser() {
@@ -29,6 +29,8 @@ fn test_onnx() {
     let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
     let onnx = OnnxGraph::from(onnx_model);
     println!("{}", onnx);
+
+    println!("{:?}", onnx.init_nodes[3].borrow().data);
 }
 
 fn test_tmp(){
@@ -51,7 +53,7 @@ fn test_matrix() {
     // println!("{:?}", matrix_f);
     // let matrix_v = MatrixType::from(onnx_model.graph.input[0].to_owned());
     // println!("{:?}", matrix_v);
-    let matrix_f = MatrixType::from(onnx_model.graph.initializer[2].to_owned());
+    let matrix_f = MatrixType::from(&onnx_model.graph.initializer[2]);
     println!("{:?}", matrix_f);
     // if let MatrixType::FloatMatrix(matrix) = matrix_f{
     //     let out = matrix.try_add(&matrix);
@@ -86,7 +88,7 @@ fn test_matrix() {
 // }
 
 fn test_broadcast() {
-    fn add<T: Copy + Add<Output=T> + Default + PartialOrd + Debug + Mul<Output=T>>(m1: &Matrix<T>, m2: &Matrix<T>) {
+    fn add<T: Numeric>(m1: &Matrix<T>, m2: &Matrix<T>) {
         println!("ADD");
         println!("M1 => {:?}", m1);
         println!("M2 => {:?}", m2);
@@ -100,7 +102,7 @@ fn test_broadcast() {
     // println!("{:?}", m1);
     // let res = m1.try_broadcast(&dim).unwrap();
     // println!("{:?}", res);
-    fn mul<T: Copy + Add<Output=T> + Default + PartialOrd + Debug + Mul<Output=T>>(m1: &Matrix<T>, m2: &Matrix<T>) {
+    fn mul<T: Numeric>(m1: &Matrix<T>, m2: &Matrix<T>) {
         println!("MATMUL");
         println!("M1 => {:?}", m1);
         println!("M2 => {:?}", m2);
@@ -114,7 +116,7 @@ fn test_broadcast() {
     let m6 = Matrix::new(vec![3, 2], Some(vec![7,1,1,0,0,4]));
     mul(&m5, &m6);
     // mul(&m4, &m5);
-    fn maxpool<T: Copy + Add<Output=T> + Default + PartialOrd + Debug + Mul<Output=T>>(m1: &Matrix<T>) {
+    fn maxpool<T: Numeric>(m1: &Matrix<T>) {
         println!("MAXPOOL");
         println!("M1 => {:?}", m1);
         let res = m1.try_max_pool(&vec![1,2], None, None, None, None, None, None).unwrap();
@@ -122,7 +124,7 @@ fn test_broadcast() {
     }
     let m7 = Matrix::new(vec![2, 3], Some(vec![1, 0, 2, 0, 3, -1]));
     maxpool(&m7);
-    fn conv<T: Copy + Add<Output=T> + Default + PartialOrd + Debug + Mul<Output=T>>(m1: &Matrix<T>, m2: &Matrix<T>) {
+    fn conv<T: Numeric>(m1: &Matrix<T>, m2: &Matrix<T>) {
         println!("CONV");
         println!("M1 => {:?}", m1);
         println!("M2 => {:?}", m2);

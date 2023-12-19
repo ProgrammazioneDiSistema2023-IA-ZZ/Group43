@@ -3,6 +3,7 @@ use std::collections::{HashMap};
 use std::fmt::{Display, Formatter};
 use std::rc::{Rc};
 use std::string::String;
+use crate::onnx::matrix::MatrixType;
 use crate::onnx::onnx_node::{FunctionNode, InputNode, HaveOut, HaveIn, OutputNode, InitNode, Name};
 use crate::parser::onnx_model::onnx_proto3::{ModelProto};
 
@@ -10,7 +11,16 @@ use crate::parser::onnx_model::onnx_proto3::{ModelProto};
 pub struct OnnxGraph{
     root_node: Rc<RefCell<InputNode>>,
     secondaries_roots: Vec<Rc<RefCell<FunctionNode>>>,
-    // pub fun_nodes: Vec<Rc<RefCell<FunctionNode>>>
+    pub fun_nodes: Vec<Rc<RefCell<FunctionNode>>>,
+    pub init_nodes: Vec<Rc<RefCell<InitNode>>>,
+    pub input_nodes: Vec<Rc<RefCell<InputNode>>>,
+    pub output_nodes: Vec<Rc<RefCell<OutputNode>>>
+}
+
+impl OnnxGraph {
+    fn load_data(data: MatrixType){
+
+    }
 }
 
 impl Display for OnnxGraph{
@@ -101,7 +111,10 @@ impl From<ModelProto> for OnnxGraph{
         OnnxGraph{
             root_node: root_node,
             secondaries_roots: secondaries_roots,
-            // fun_nodes: fun_nodes
+            fun_nodes: fun_nodes,
+            init_nodes: init_nodes.into_iter().map(|(_, n)| n).collect(),
+            input_nodes: input_nodes.into_iter().map(|(_, n)| n).collect(),
+            output_nodes: output_nodes.into_iter().map(|(_, n)| n).collect(),
         }
     }
 }
