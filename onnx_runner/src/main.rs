@@ -8,6 +8,7 @@ use onnx_runner::parser::parser::Parser;
 use onnx_runner::onnx::onnx_graph::OnnxGraph;
 use image::io::Reader as ImageReader;
 use onnx_runner::onnx::matrix::MatrixOperationError::MismatchTypeError;
+use onnx_runner::onnx::onnx_node::HaveOut;
 
 fn main() {
     println!("Welcome to the onnx runner!");
@@ -32,7 +33,7 @@ fn test_parser() {
 fn test_onnx() {
     let onnx_file = "mnist-12";
     let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
-    let onnx = OnnxGraph::from(onnx_model);
+    let onnx = OnnxGraph::try_from(onnx_model).unwrap();
     println!("{}", onnx);
 
     println!("{:?}", onnx.init_nodes[3].borrow().data);
@@ -153,9 +154,9 @@ fn test_img(){
 fn test_inference() -> Result<(), MatrixOperationError>{
     let onnx_file = "mnist-12";
     let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
-    let onnx = OnnxGraph::from(onnx_model);
+    let onnx = OnnxGraph::try_from(onnx_model)?;
 
-    let img = ImageReader::open("two.png").unwrap().decode().unwrap();
+    let img = ImageReader::open("zero.png").unwrap().decode().unwrap();
     let input_matrix;
     match img {
         ImageLuma8(ref luma) => {
@@ -165,12 +166,29 @@ fn test_inference() -> Result<(), MatrixOperationError>{
         _ => return Err(MismatchTypeError)
     }
     onnx.try_load_data(input_matrix)?;
-    println!("{:?}", onnx.root_node.borrow().data);
+    // println!("{:?}", onnx.root_node.borrow().data);
 
-    let tmp = MatrixType::new(vec![2, 4], Some(vec![2,3,1,1,1,2,4,2]), None);
-    println!("EASY MAXPOOL: {:?}", tmp.try_max_pool(&vec![2,2], Some(&vec![2,2]), None, None, None, None, None));
-    println!("{:?}", onnx.fun_nodes[3].borrow().op1.is_some());
-    let res = onnx.fun_nodes[3].borrow().calculate(tmp)?;
-    println!("{:?}", res);
+    // let tmp = MatrixType::new(vec![2, 4], Some(vec![2,3,1,1,1,2,4,2]), None);
+    // println!("EASY MAXPOOL: {:?}", tmp.try_max_pool(&vec![2,2], Some(&vec![2,2]), None, None, None, None, None));
+    // println!("{:?}", onnx.fun_nodes[3].borrow().op1.is_some());
+    // let res = onnx.fun_nodes[3].borrow().calculate(tmp)?;
+    // println!("{:?}", res);
+
+    println!("All fun node have op: {:?}", onnx.fun_nodes.iter().all(|n| n.borrow().op1.is_some() || n.borrow().op2.is_some()));
+
+    // println!("RootData {:?}", onnx.root_node.borrow_mut().try_calculate());
+    // println!("Conv1Data {:?}", onnx.fun_nodes[0].borrow_mut().try_calculate());
+    // println!("Add1Data {:?}", onnx.fun_nodes[1].borrow_mut().try_calculate());
+    // println!("Relu1Data {:?}", onnx.fun_nodes[2].borrow_mut().try_calculate());
+    // println!("MaxPool1Data {:?}", onnx.fun_nodes[3].borrow_mut().try_calculate());
+    // println!("Conv2Data {:?}", onnx.fun_nodes[4].borrow_mut().try_calculate());
+    // println!("Add2Data {:?}", onnx.fun_nodes[5].borrow_mut().try_calculate());
+    // println!("Relu2Data {:?}", onnx.fun_nodes[6].borrow_mut().try_calculate());
+    // println!("MaxPool2Data {:?}", onnx.fun_nodes[7].borrow_mut().try_calculate());
+    // println!("ReshapeData {:?}", onnx.fun_nodes[8].borrow_mut().try_calculate());
+    // println!("ReshapeAltData {:?}", onnx.fun_nodes[9].borrow_mut().try_calculate());
+    // println!("MatMul2Data {:?}", onnx.fun_nodes[10].borrow_mut().try_calculate());
+    // println!("AddData {:?}", onnx.fun_nodes[11].borrow_mut().try_calculate());
+    println!("AddData {:?}", onnx.fun_nodes[11].borrow_mut().try_calculate());
     Ok(())
 }

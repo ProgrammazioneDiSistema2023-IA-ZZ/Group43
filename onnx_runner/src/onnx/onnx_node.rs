@@ -2,8 +2,9 @@ use std::any::Any;
 use std::cell::{RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::{Rc, Weak};
-use crate::onnx::matrix::{Data, Matrix, MatrixOperationError, MatrixType, TryOperation1, TryOperation1Attributes, TryOperation2};
-use crate::onnx::matrix::MatrixOperationError::MismatchSizeError;
+use protobuf::descriptor::file_options::OptimizeMode::SPEED;
+use crate::onnx::matrix::{Data, Matrix, MatrixOperationError, MatrixType, TryOperation1, TryOperation1Attributes, TryOperation2, TryOperation2Attributes};
+use crate::onnx::matrix::MatrixOperationError::{InvalidArgumentError, MismatchSizeError, MismatchTypeError, MissingInputError, NotImplementedError, VoidMatrixError};
 use crate::parser::onnx_model::onnx_proto3::{AttributeProto, NodeProto, TensorProto, ValueInfoProto};
 
 //Common trait//////////////////////////////////////////////////////////////////////////////
@@ -13,6 +14,10 @@ pub trait HaveOut: Debug{
     fn get_outputs(&self) -> &Vec<Rc<RefCell<dyn HaveIn>>>;
 
     fn as_any(&self) -> &dyn Any;
+
+    fn try_calculate(&mut self) -> Result<&MatrixType, MatrixOperationError>;
+
+    fn try_get_out_data(&mut self) -> Result<&MatrixType, MatrixOperationError>;
 }
 
 pub trait HaveIn: Debug{
@@ -32,20 +37,22 @@ pub trait Name{
 pub struct InputNode {
     node_name: String,
     outputs: Vec<Rc<RefCell<dyn HaveIn>>>,
-    pub data: MatrixType
+    expected_dims: Vec<usize>,
+    pub data: Option<MatrixType>
 }
 
 impl InputNode {
-    fn new(name: String, data: MatrixType) -> Self{
+    fn new(name: String, expected_dims: Vec<usize>) -> Self{
         InputNode{
             node_name: name,
             outputs: Vec::default(),
-            data: data
+            expected_dims: expected_dims,
+            data: None,
         }
     }
 
     pub fn try_load_data(&mut self, data: MatrixType) -> Result<(), MatrixOperationError>{
-        self.data = data.try_reshape(&self.data.get_dims(), None)?;
+        self.data = Some(data.try_reshape(&self.expected_dims, None)?);
         Ok(())
     }
 }
@@ -62,6 +69,17 @@ impl HaveOut for InputNode {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn try_calculate(&mut self) -> Result<&MatrixType, MatrixOperationError> {
+        self.try_get_out_data()
+    }
+
+    fn try_get_out_data(&mut self) -> Result<&MatrixType, MatrixOperationError> {
+        match &self.data {
+            Some(d) => Ok(d),
+            None => Err(VoidMatrixError)
+        }
+    }
 }
 
 impl Name for InputNode {
@@ -72,7 +90,7 @@ impl Name for InputNode {
 
 impl From<&ValueInfoProto> for InputNode {
     fn from(value_proto: &ValueInfoProto) -> Self {
-        InputNode::new(value_proto.name.to_owned(), MatrixType::from(value_proto))
+        InputNode::new(value_proto.name.to_owned(), MatrixType::from(value_proto).get_dims())
     }
 }
 
@@ -93,12 +111,13 @@ pub struct FunctionNode{
     outputs_name: Vec<String>,
     data: Option<MatrixType>,
     pub op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
+    pub op2: Option<fn(&MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
     attributes: Vec<AttributeProto>,
 }
 
 
 impl FunctionNode {
-    fn new(name: String, op_type: String, inputs_name: Vec<String>, outputs_name: Vec<String>, data: Option<MatrixType>, op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>, attributes: Vec<AttributeProto>) -> Self{
+    fn new(name: String, op_type: String, inputs_name: Vec<String>, outputs_name: Vec<String>, data: Option<MatrixType>, op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>, op2: Option<fn(&MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>, attributes: Vec<AttributeProto>) -> Self{
         FunctionNode{
             node_name: name,
             inputs: Vec::default(),
@@ -108,7 +127,8 @@ impl FunctionNode {
             outputs_name: outputs_name,
             data: data,
             op1: op1,
-            attributes: attributes
+            op2: op2,
+            attributes: attributes,
         }
     }
 
@@ -124,9 +144,9 @@ impl FunctionNode {
         &self.op_type
     }
 
-    pub fn calculate(&self, m: MatrixType) -> Result<MatrixType, MatrixOperationError>{
-        self.op1.unwrap()(&m, &self.attributes)
-    }
+    // pub fn calculate(&self, m: MatrixType) -> Result<MatrixType, MatrixOperationError>{
+    //     self.op1.unwrap()(&m, &self.attributes)
+    // }
 }
 
 impl HaveIn for FunctionNode {
@@ -155,6 +175,39 @@ impl HaveOut for FunctionNode {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn try_calculate(&mut self) -> Result<&MatrixType, MatrixOperationError> {
+        let inputs_data = self.inputs.iter().map(|input_n| {
+            match input_n.upgrade() {
+                Some(i_n) => Ok(i_n.borrow_mut().try_get_out_data()?.to_owned()),
+                None => Err(MissingInputError)
+            }
+        }).collect::<Result<Vec<MatrixType>, MatrixOperationError>>()?;
+
+        if let Some(op1) = self.op1{
+            if inputs_data.len() == 1 {
+                self.data = Some(op1(&inputs_data[0], &self.attributes)?);
+            }
+        } else if let Some(op2) = self.op2{
+            if inputs_data.len() == 2 {
+                self.data = Some(op2(&inputs_data[0], &inputs_data[1], &self.attributes)?);
+            }
+        }
+
+        if self.data.is_some(){
+            Ok(&self.data.as_ref().unwrap())
+        } else {
+            Err(MismatchTypeError)
+        }
+    }
+
+    fn try_get_out_data(&mut self) -> Result<&MatrixType, MatrixOperationError> {
+        if self.data.is_some(){
+            Ok(&self.data.as_ref().unwrap())
+        } else {
+            self.try_calculate()
+        }
+    }
 }
 
 impl Name for FunctionNode {
@@ -165,21 +218,31 @@ impl Name for FunctionNode {
 
 // Option<fn(&MatrixType) -> Result<MatrixType, MatrixOperationError>>
 
-impl From<&NodeProto> for FunctionNode {
-    fn from(node_proto: &NodeProto) -> Self {
-        let mut op: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>> = None;
-        if node_proto.op_type == "MaxPool"{
-            op = Some(MatrixType::try_max_pool_attributes);
-        }
-        FunctionNode::new(
+impl TryFrom<&NodeProto> for FunctionNode {
+    type Error = MatrixOperationError;
+
+    fn try_from(node_proto: &NodeProto) -> Result<Self, Self::Error> {
+        let mut op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>> = None;
+        let mut op2: Option<fn(&MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>> = None;
+        match node_proto.op_type.as_str() {
+            "Relu" => op1 = Some(MatrixType::try_relu_attributes),
+            "MaxPool" => op1 = Some(MatrixType::try_max_pool_attributes),
+            "Add" => op2 = Some(MatrixType::try_add_attributes),
+            "MatMul" => op2 = Some(MatrixType::try_mat_mul_attributes),
+            "Conv" => op2 = Some(MatrixType::try_conv_attributes),
+            "Reshape" => op2 = Some(MatrixType::try_reshape_attributes),
+            _ => return Err(NotImplementedError)
+        };
+        Ok(FunctionNode::new(
             format!("{}_{}",node_proto.op_type, node_proto.name),
             node_proto.op_type.to_owned(),
             node_proto.input.to_owned(),
             node_proto.output.to_owned(),
             None,
-            op,
+            op1,
+            op2,
             node_proto.attribute.clone()
-        )
+        ))
     }
 }
 
@@ -219,6 +282,14 @@ impl HaveOut for InitNode {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn try_calculate(&mut self) -> Result<&MatrixType, MatrixOperationError> {
+        self.try_get_out_data()
+    }
+
+    fn try_get_out_data(&mut self) -> Result<&MatrixType, MatrixOperationError> {
+        Ok(&self.data)
+    }
 }
 
 impl Name for InitNode {
@@ -244,15 +315,17 @@ impl Display for InitNode {
 pub struct OutputNode {
     node_name: String,
     inputs: Vec<Weak<RefCell<dyn HaveOut>>>,
-    pub data: MatrixType
+    expected_dims: Vec<usize>,
+    pub data: Option<MatrixType>
 }
 
 impl OutputNode {
-    fn new(name: String, data: MatrixType) -> Self{
+    fn new(name: String, expected_dims: Vec<usize>) -> Self{
         OutputNode{
             node_name: name,
             inputs: Vec::default(),
-            data: data
+            expected_dims: expected_dims,
+            data: None,
         }
     }
 }
@@ -279,7 +352,7 @@ impl Name for OutputNode {
 
 impl From<&ValueInfoProto> for OutputNode {
     fn from(value_proto: &ValueInfoProto) -> Self {
-        OutputNode::new(value_proto.name.to_owned(), MatrixType::from(value_proto))
+        OutputNode::new(value_proto.name.to_owned(), MatrixType::from(value_proto).get_dims())
     }
 }
 

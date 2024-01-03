@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter, write};
 use std::ops::{Add, Mul};
 use crate::onnx::matrix::MatrixType::{FloatMatrix, IntMatrix};
-use crate::onnx::matrix::MatrixOperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError, MissingFieldError, InvalidArgumentError};
+use crate::onnx::matrix::MatrixOperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError, MissingFieldError, InvalidArgumentError, MissingInputError};
 use crate::parser::onnx_model::onnx_proto3::{AttributeProto, TensorProto, ValueInfoProto};
 use crate::parser::onnx_model::onnx_proto3::tensor_proto::DataType;
 use crate::parser::onnx_model::onnx_proto3::tensor_shape_proto::dimension::Value::{DimParam, DimValue};
@@ -18,6 +18,7 @@ pub enum MatrixOperationError {
     NotImplementedError,
     MissingFieldError,
     InvalidArgumentError,
+    MissingInputError,
 }
 
 impl Error for MatrixOperationError {}
@@ -33,6 +34,7 @@ impl Display for MatrixOperationError {
             NotImplementedError => write!(f, "Operation not implemented"),
             MissingFieldError => write!(f, "Missing field"),
             InvalidArgumentError => write!(f, "Invalid argument"),
+            MissingInputError => write!(f, "Missing input"),
         }
     }
 }
@@ -82,16 +84,16 @@ pub trait TryOperation1Attributes{
     fn try_max_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
 }
 
-pub trait TryOperation2Attributes<T>{
+pub trait TryOperation2Attributes{
     type Output;
 
-    fn try_add_attributes(&self, other: T, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
+    fn try_add_attributes(&self, other: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
 
-    fn try_mat_mul_attributes(&self, other: T, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
+    fn try_mat_mul_attributes(&self, other: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
 
-    fn try_conv_attributes(&self, kernel: T, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
+    fn try_conv_attributes(&self, kernel: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
 
-    fn try_reshape_attributes(&self, dim: T, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
+    fn try_reshape_attributes(&self, dim: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -629,7 +631,7 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
     fn try_conv(&self, kernel: &Matrix<T>, kernel_shape: &Vec<usize>, strides: Option<&Vec<usize>>, auto_pad: Option<&String>, pads: Option<&Vec<usize>>, group: Option<&usize>, dilations: Option<&Vec<usize>>) -> Result<Self::Output, MatrixOperationError> {
         fn get_pad_couple(dim: usize, kernel_dim: usize, stride_dim: usize, is_upper: bool) -> Vec<usize>{
             let out_dim = (dim + stride_dim - 1) / stride_dim;
-            let total_pads = kernel_dim - dim + stride_dim * (out_dim - 1);
+            let total_pads = kernel_dim + stride_dim * (out_dim - 1) - dim;
             let small_pad = total_pads / 2;
             let big_pad = if total_pads%2 == 0 { small_pad } else { small_pad+1 };
             if is_upper{
@@ -639,11 +641,8 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
             }
         }
 
-        if kernel_shape.len() != 2{
-            return Err(NotImplementedError);
-        }
         if let Some(g) = group{
-            if *g != 0 {
+            if *g != 1 {
                 return Err(NotImplementedError);
             }
         }
@@ -696,10 +695,44 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
             Ok(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out))
         }
         else if let (Some(sub1), Some(sub2)) = (&self.sub_matrices, &kernel.sub_matrices){
-            let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_conv(s2, kernel_shape, Some(&_strides), auto_pad, Some(&_pads), None, None)).collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
-            let mut dims_out = sub_out[0].get_dims();
-            dims_out.insert(0, sub_out.len());
-            Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
+            match self.get_dims().len() {
+                4 => {
+                    if self.dims[0] != 1 {
+                        return Err(NotImplementedError)
+                    }
+
+                    let sub_out = sub2.iter()
+                        .map(|s2| sub1[0].try_conv(s2, kernel_shape, Some(&_strides), auto_pad, Some(&_pads), None, None))
+                        .collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+                    let mut dims_out = sub_out[0].get_dims();
+                    dims_out.insert(0, sub_out.len());
+                    let mut matrix_out = Matrix::new_with_sub_matrices(dims_out.to_owned(), sub_out);
+                    matrix_out = matrix_out.try_reshape(&vec![dims_out[1], dims_out[0], dims_out[2], dims_out[3]], None)?;
+                    Ok(matrix_out)
+                }
+                3 => {
+                    let mut sub_out = sub1.iter().zip(sub2.iter())
+                        .map(|(s1, s2)| s1.try_conv(s2, kernel_shape, Some(&_strides), auto_pad, Some(&_pads), None, None))
+                        .collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+                    if sub_out.len() > 1{
+                        let mut start = sub_out[0].to_owned();
+                        for  m in sub_out[1..].iter(){
+                            start = start.try_add(m)?;
+                        }
+                        sub_out = vec![start];
+                    }
+                    let mut dims_out = sub_out[0].get_dims();
+                    dims_out.insert(0, sub_out.len());
+                    Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
+                }
+                _ => {
+                    Err(MatrixCompositionError)
+                }
+            }
+            // let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_conv(s2, kernel_shape, Some(&_strides), auto_pad, Some(&_pads), None, None)).collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+            // let mut dims_out = sub_out[0].get_dims();
+            // dims_out.insert(0, sub_out.len());
+            // Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
         }
         else {
             Err(MatrixCompositionError)
@@ -917,7 +950,7 @@ impl TryOperation1Attributes for MatrixType{
     }
 }
 
-impl TryOperation2Attributes<&Self> for MatrixType {
+impl TryOperation2Attributes for MatrixType {
     type Output = Self;
 
     fn try_add_attributes(&self, other: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError> {
@@ -957,7 +990,7 @@ impl TryOperation2Attributes<&Self> for MatrixType {
         }
     }
 
-    fn try_reshape_attributes(&self, dim: &Self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
+    fn try_reshape_attributes(&self, dim: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError> {
         let mut allowzero: Option<usize> = None;
         let mut have_invalid_argument = false;
         attributes.iter().for_each(|a| {

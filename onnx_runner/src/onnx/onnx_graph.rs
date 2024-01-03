@@ -38,11 +38,16 @@ pub trait AddEdge{
 
 impl AddEdge for OnnxGraph{}
 
-impl From<ModelProto> for OnnxGraph{
-    fn from(model: ModelProto) -> Self {
+impl TryFrom<ModelProto> for OnnxGraph{
+    type Error = MatrixOperationError;
+
+    fn try_from(model: ModelProto) -> Result<Self, Self::Error> {
         //Initialize nodes
         let fun_nodes: Vec<Rc<RefCell<FunctionNode>>> = model.graph.node.iter()
-            .map(|n| Rc::new(RefCell::new(FunctionNode::from(n))))
+            .map(|n| FunctionNode::try_from(n))
+            .collect::<Result<Vec<FunctionNode>, MatrixOperationError>>()?
+            .into_iter()
+            .map(|n| Rc::new(RefCell::new(n)))
             .collect();
         let init_nodes: HashMap<&String, Rc<RefCell<InitNode>>> = model.graph.initializer.iter()
             .map(|n| (&n.name, Rc::new(RefCell::new(InitNode::from(n)))))
@@ -108,13 +113,15 @@ impl From<ModelProto> for OnnxGraph{
             }
         }).collect();
 
-        OnnxGraph{
-            root_node: root_node,
-            secondaries_roots: secondaries_roots,
-            fun_nodes: fun_nodes,
-            init_nodes: init_nodes.into_iter().map(|(_, n)| n).collect(),
-            input_nodes: input_nodes.into_iter().map(|(_, n)| n).collect(),
-            output_nodes: output_nodes.into_iter().map(|(_, n)| n).collect(),
-        }
+        Ok(
+            OnnxGraph{
+                root_node: root_node,
+                secondaries_roots: secondaries_roots,
+                fun_nodes: fun_nodes,
+                init_nodes: init_nodes.into_iter().map(|(_, n)| n).collect(),
+                input_nodes: input_nodes.into_iter().map(|(_, n)| n).collect(),
+                output_nodes: output_nodes.into_iter().map(|(_, n)| n).collect(),
+            }
+        )
     }
 }
