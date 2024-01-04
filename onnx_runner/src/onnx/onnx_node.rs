@@ -203,7 +203,7 @@ impl HaveOut for FunctionNode {
 
     fn try_get_out_data(&mut self) -> Result<&MatrixType, MatrixOperationError> {
         if self.data.is_some(){
-            Ok(&self.data.as_ref().unwrap())
+            Ok(self.data.as_ref().unwrap())
         } else {
             self.try_calculate()
         }
@@ -216,7 +216,6 @@ impl Name for FunctionNode {
     }
 }
 
-// Option<fn(&MatrixType) -> Result<MatrixType, MatrixOperationError>>
 
 impl TryFrom<&NodeProto> for FunctionNode {
     type Error = MatrixOperationError;
@@ -328,6 +327,19 @@ impl OutputNode {
             data: None,
         }
     }
+
+    pub fn try_compute_all(&mut self) -> Result<&MatrixType, MatrixOperationError>{
+        if self.inputs.len() != 1{
+            Err(NotImplementedError)
+        } else {
+            let input_node = self.inputs[0].upgrade();
+            match input_node {
+                Some(n) => self.data = Some(n.borrow_mut().try_get_out_data()?.to_owned()),
+                None => return Err(MissingInputError)
+            };
+            Ok(self.data.as_ref().unwrap())
+        }
+    }
 }
 
 impl HaveIn for OutputNode {
@@ -361,96 +373,3 @@ impl Display for OutputNode {
         write!(f, "Output node:{}", self.node_name)
     }
 }
-
-
-
-
-// #[derive(Debug)]
-// pub struct OnnxNode{
-//     node_name: String,
-//     inputs: Vec<Weak<RefCell<OnnxNode>>>,
-//     outputs: Vec<Rc<RefCell<OnnxNode>>>,
-//     inputs_names: Option<HashSet<String>>,
-//     outputs_names: Option<HashSet<String>>
-// }
-//
-//
-//
-// impl OnnxNode{
-//     fn new(name: & String, inputs_name: Option<HashSet<String>>, outputs_names: Option<HashSet<String>>) -> Self{
-//         OnnxNode{
-//             node_name: name.to_owned(),
-//             inputs: Vec::default(),
-//             outputs: Vec::default(),
-//             inputs_names: inputs_name,
-//             outputs_names: outputs_names
-//         }
-//     }
-//
-//     fn get_name(&self) -> &String{
-//         &self.node_name
-//     }
-//
-//     fn has_inputs(&self) -> bool{
-//         !self.inputs.is_empty()
-//     }
-//
-//     fn has_outputs(&self) -> bool{
-//         !self.outputs.is_empty()
-//     }
-// }
-//
-// impl Display for OnnxNode{
-//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-//         let mut out = format!("Node: {}\nInputs({}, len:{}):\n", self.node_name, self.node_name, self.inputs.len());
-//         self.inputs.iter().for_each(|node| {
-//             if let Some(n) = node.upgrade(){
-//                 out += format!("{},", n.borrow().node_name).as_str()
-//             }
-//         });
-//         out += format!("\nOutputs({}, len:{}):\n", self.node_name, self.outputs.len()).as_str();
-//         self.outputs.iter().for_each(|node| out += format!("{},\n", node.borrow()).as_str());
-//         write!(f, "{}", out)
-//     }
-// }
-//
-// impl From<&NodeProto> for OnnxNode{
-//     fn from(node_proto: &NodeProto) -> Self {
-//         OnnxNode::new(
-//             &format!("{}-{}", node_proto.op_type, node_proto.name),
-//             Some(node_proto.input.iter().map(|name| name.to_owned()).collect::<HashSet<String>>()),
-//             Some(node_proto.output.iter().map(|name| name.to_owned()).collect::<HashSet<String>>())
-//         )
-//     }
-// }
-//
-// impl From<&ValueInfoProto> for OnnxNode{
-//     fn from(value_proto: &ValueInfoProto) -> Self {
-//         OnnxNode::new(
-//             &value_proto.name,
-//             None,
-//             None
-//         )
-//     }
-// }
-//
-// impl From<&TensorProto> for OnnxNode{
-//     fn from(tensor_proto: &TensorProto) -> Self {
-//         OnnxNode::new(
-//             &tensor_proto.name,
-//             None,
-//             None
-//         )
-//     }
-// }
-//
-// pub trait AddNeighbourConnection {
-//     fn add_connection(base_node:  Rc<RefCell<OnnxNode>>, destination_node:  Rc<RefCell<OnnxNode>>) -> ();
-// }
-//
-// impl AddNeighbourConnection for OnnxNode {
-//     fn add_connection(base_node:  Rc<RefCell<OnnxNode>>, destination_node: Rc<RefCell<OnnxNode>>) -> () {
-//         base_node.borrow_mut().outputs.push(destination_node.clone());
-//         destination_node.borrow_mut().inputs.push(Rc::downgrade(&base_node));
-//     }
-// }

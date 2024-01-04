@@ -156,7 +156,7 @@ fn test_inference() -> Result<(), MatrixOperationError>{
     let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
     let onnx = OnnxGraph::try_from(onnx_model)?;
 
-    let img = ImageReader::open("zero.png").unwrap().decode().unwrap();
+    let img = ImageReader::open("seven.png").unwrap().decode().unwrap();
     let input_matrix;
     match img {
         ImageLuma8(ref luma) => {
@@ -189,6 +189,8 @@ fn test_inference() -> Result<(), MatrixOperationError>{
     // println!("ReshapeAltData {:?}", onnx.fun_nodes[9].borrow_mut().try_calculate());
     // println!("MatMul2Data {:?}", onnx.fun_nodes[10].borrow_mut().try_calculate());
     // println!("AddData {:?}", onnx.fun_nodes[11].borrow_mut().try_calculate());
-    println!("AddData {:?}", onnx.fun_nodes[11].borrow_mut().try_calculate());
+    // println!("AddData {:?}", onnx.fun_nodes[11].borrow_mut().try_calculate());
+    println!("Out {:?}", onnx.output_nodes[0].borrow_mut().try_compute_all());
+
     Ok(())
 }
