@@ -1,8 +1,11 @@
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter, write};
 use std::ops::{Add, Mul};
+use std::sync::Arc;
+use std::thread;
+use std::thread::JoinHandle;
 use crate::onnx::matrix::MatrixType::{FloatMatrix, IntMatrix};
-use crate::onnx::matrix::MatrixOperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError, MissingFieldError, InvalidArgumentError, MissingInputError};
+use crate::onnx::matrix::MatrixOperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError, MissingFieldError, InvalidArgumentError, MissingInputError, ThreadingError };
 use crate::parser::onnx_model::onnx_proto3::{AttributeProto, TensorProto, ValueInfoProto};
 use crate::parser::onnx_model::onnx_proto3::tensor_proto::DataType;
 use crate::parser::onnx_model::onnx_proto3::tensor_shape_proto::dimension::Value::{DimParam, DimValue};
@@ -19,6 +22,7 @@ pub enum MatrixOperationError {
     MissingFieldError,
     InvalidArgumentError,
     MissingInputError,
+    ThreadingError,
 }
 
 impl Error for MatrixOperationError {}
@@ -35,11 +39,12 @@ impl Display for MatrixOperationError {
             MissingFieldError => write!(f, "Missing field"),
             InvalidArgumentError => write!(f, "Invalid argument"),
             MissingInputError => write!(f, "Missing input"),
+            ThreadingError => write!(f, "Threading error"),
         }
     }
 }
 
-pub trait Numeric: Copy + Default + Debug + Add<Output = Self> + Mul<Output = Self> + PartialOrd{}
+pub trait Numeric: Copy + Default + Debug + Add<Output = Self> + Mul<Output = Self> + PartialOrd + Send + Sync + 'static{}
 
 impl Numeric for f32{}
 impl Numeric for i64{}
@@ -454,12 +459,37 @@ impl<T: Numeric> TryOperation1 for Matrix<T>{
     type Output = Matrix<T>;
 
     fn try_relu(&self) -> Result<Self::Output, MatrixOperationError> {
+        println!("RELIIIII");
         if let Some(m2d) = &self.matrix2d{
             let m2d_out = m2d.try_relu()?;
             Ok(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out))
         }
         else if let Some(sub) = &self.sub_matrices{
-            let sub_out = sub.iter().map(|s| s.try_relu()).collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+            let mut sub_out = Vec::new();
+            if sub.len() == 1{
+                println!("ehi1");
+                sub_out.push(sub[0].try_relu()?)
+            } else {
+                println!("ehi");
+                let mut handles = Vec::new();
+                for s in sub.iter(){
+                    let s_new = Arc::new(s.clone());
+                    let s2 = s_new.clone();
+                    handles.push(thread::spawn(move || s2.try_relu()));
+                }
+                for h in handles{
+                    match h.join(){
+                        Ok(res) => sub_out.push(res?),
+                        Err(_) => return Err(ThreadingError)
+                    }
+                };
+                // sub_out = sub.iter().map(|s| thread::spawn(|| s.try_relu()))
+                //     .collect::<Vec<JoinHandle<_>>>()
+                //     .iter()
+                //     .map(|th| th.join()?)
+                //     .collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+                // sub_out = sub.iter().map(|s| s.try_relu()).collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+            }
             let mut dims_out = sub_out[0].get_dims();
             dims_out.insert(0, sub_out.len());
             Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
@@ -578,8 +608,8 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
             let m2 = other.try_broadcast(&broadcast_dim)?;
             Ok((m1, m2))
         }
-        let m1;
-        let m2;
+        let mut m1 = Matrix::default();
+        let mut m2 = Matrix::default();
         let mut m1_ref = self;
         let mut m2_ref = other;
         if self.dims.len() == other.dims.len(){
@@ -915,6 +945,7 @@ impl TryOperation2<&Self> for MatrixType {
 
 impl TryOperation1Attributes for MatrixType{
     fn try_relu_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
+        println!("EHi attr");
         self.try_relu()
     }
 
