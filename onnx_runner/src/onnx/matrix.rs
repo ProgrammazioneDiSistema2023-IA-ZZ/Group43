@@ -68,9 +68,9 @@ pub trait TryOperation1{
 
     fn try_reshape(&self, dim: &Vec<usize>, allow_zero: Option<&usize>) -> Result<Self::Output, MatrixOperationError>;
 
-    fn try_broadcast(&self, dim: &Vec<usize>) -> Result<Self::Output, MatrixOperationError>;
+    fn try_broadcast(&self, dim: Arc<Vec<usize>>) -> Result<Self::Output, MatrixOperationError>;
 
-    fn try_max_pool(&self, kernel_shape: &Vec<usize>, strides: Option<&Vec<usize>>, auto_pad: Option<&String>, pads: Option<&Vec<usize>>, ceil_mode: Option<&usize>, dilations: Option<&Vec<usize>>, storage_order: Option<&usize>) -> Result<Self::Output, MatrixOperationError>;
+    fn try_max_pool(&self, kernel_shape: Arc<Vec<usize>>, strides: Arc<Option<Vec<usize>>>, auto_pad: Arc<Option<String>>, pads: Arc<Option<Vec<usize>>>, ceil_mode: Arc<Option<usize>>, dilations: Arc<Option<Vec<usize>>>, storage_order: Arc<Option<usize>>) -> Result<Self::Output, MatrixOperationError>;
 }
 
 pub trait TryOperation2<T>{
@@ -197,7 +197,7 @@ impl<T: Numeric> TryOperation1 for Matrix2D<T>{
         Err(NotImplementedError)
     }
 
-    fn try_broadcast(&self, dim: &Vec<usize>) -> Result<Self::Output, MatrixOperationError> {
+    fn try_broadcast(&self, dim: Arc<Vec<usize>>) -> Result<Self::Output, MatrixOperationError> {
         let mut data = self.get_data_or_error()?.clone();
         if self.cols != dim[1] {
             if self.cols == 1 {
@@ -217,8 +217,8 @@ impl<T: Numeric> TryOperation1 for Matrix2D<T>{
         Ok(Matrix2D::new(dim[0], dim[1], Some(data)))
     }
 
-    fn try_max_pool(&self, kernel_shape: &Vec<usize>, strides: Option<&Vec<usize>>, auto_pad: Option<&String>, pads: Option<&Vec<usize>>, ceil_mode: Option<&usize>, dilations: Option<&Vec<usize>>, storage_order: Option<&usize>) -> Result<Self::Output, MatrixOperationError> {
-        let _strides = match strides {
+    fn try_max_pool(&self, kernel_shape: Arc<Vec<usize>>, strides: Arc<Option<Vec<usize>>>, auto_pad: Arc<Option<String>>, pads: Arc<Option<Vec<usize>>>, ceil_mode: Arc<Option<usize>>, dilations: Arc<Option<Vec<usize>>>, storage_order: Arc<Option<usize>>) -> Result<Self::Output, MatrixOperationError> {
+        let _strides = match strides.as_ref() {
             Some(s) => s.to_owned(),
             None => vec![1; kernel_shape.len()]
         };
@@ -328,7 +328,7 @@ impl<T: Numeric> TryOperation2<&Matrix2D<T>> for Matrix2D<T>{
 pub struct Matrix<T>{
     dims: Vec<usize>,
     matrix2d: Option<Matrix2D<T>>,
-    sub_matrices: Option<Vec<Matrix<T>>>
+    sub_matrices: Option<Vec<Arc<Matrix<T>>>>
 }
 
 impl<T: Numeric> Matrix<T> {
@@ -357,7 +357,7 @@ impl<T: Numeric> Matrix<T> {
                         Some(d) => Some(d[i*sub_data_count..(i+1)*sub_data_count].to_owned()),
                         None => None
                     };
-                    sub_matrices.push(Matrix::new(Vec::from(sub_dims), sub_data));
+                    sub_matrices.push(Arc::new(Matrix::new(Vec::from(sub_dims), sub_data)));
                 }
                 Matrix{
                     dims: dims,
@@ -376,7 +376,7 @@ impl<T: Numeric> Matrix<T> {
         }
     }
 
-    fn new_with_sub_matrices(dims: Vec<usize>, sub_matrices: Vec<Matrix<T>>) -> Self{
+    fn new_with_sub_matrices(dims: Vec<usize>, sub_matrices: Vec<Arc<Matrix<T>>>) -> Self{
         Matrix{
             dims: dims,
             matrix2d: None,
@@ -456,26 +456,22 @@ impl<'a, T: Numeric> Data<'a, T> for Matrix<T> {
 }
 
 impl<T: Numeric> TryOperation1 for Matrix<T>{
-    type Output = Matrix<T>;
+    type Output = Arc<Matrix<T>>;
 
     fn try_relu(&self) -> Result<Self::Output, MatrixOperationError> {
-        println!("RELIIIII");
         if let Some(m2d) = &self.matrix2d{
             let m2d_out = m2d.try_relu()?;
-            Ok(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out))
+            Ok(Arc::new(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out)))
         }
         else if let Some(sub) = &self.sub_matrices{
             let mut sub_out = Vec::new();
             if sub.len() == 1{
-                println!("ehi1");
                 sub_out.push(sub[0].try_relu()?)
             } else {
-                println!("ehi");
                 let mut handles = Vec::new();
                 for s in sub.iter(){
-                    let s_new = Arc::new(s.clone());
-                    let s2 = s_new.clone();
-                    handles.push(thread::spawn(move || s2.try_relu()));
+                    let s_new = s.clone();
+                    handles.push(thread::spawn(move || s_new.try_relu()));
                 }
                 for h in handles{
                     match h.join(){
@@ -483,16 +479,10 @@ impl<T: Numeric> TryOperation1 for Matrix<T>{
                         Err(_) => return Err(ThreadingError)
                     }
                 };
-                // sub_out = sub.iter().map(|s| thread::spawn(|| s.try_relu()))
-                //     .collect::<Vec<JoinHandle<_>>>()
-                //     .iter()
-                //     .map(|th| th.join()?)
-                //     .collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
-                // sub_out = sub.iter().map(|s| s.try_relu()).collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
             }
             let mut dims_out = sub_out[0].get_dims();
             dims_out.insert(0, sub_out.len());
-            Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
+            Ok(Arc::new(Matrix::new_with_sub_matrices(dims_out, sub_out)))
         }
         else {
             Err(VoidMatrixError)
@@ -510,80 +500,122 @@ impl<T: Numeric> TryOperation1 for Matrix<T>{
             return Err(MismatchSizeError);
         }
         let data = self.get_data_or_error()?;
-        Ok(Matrix::new(dim.to_owned(), Some(data)))
+        Ok(Arc::new(Matrix::new(dim.to_owned(), Some(data))))
     }
 
-    fn try_broadcast(&self, dim: &Vec<usize>) -> Result<Self::Output, MatrixOperationError> {
+    fn try_broadcast(&self, dim: Arc<Vec<usize>>) -> Result<Self::Output, MatrixOperationError> {
         let this_dim = Self::enlarge_dim(&self.dims, dim.len());
         let out = self.try_reshape(&this_dim, None)?;
-        if let Some(m2d) = out.matrix2d{
-            let m2d_out = m2d.try_broadcast(&dim)?;
-            Ok(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out))
+        if let Some(m2d) = &out.matrix2d{
+            let m2d_out = m2d.try_broadcast(dim)?;
+            Ok(Arc::new(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out)))
         }
-        else if let Some(subs) = out.sub_matrices {
-            let mut sub_out;
+        else if let Some(subs) = &out.sub_matrices {
+            let mut sub_out: Vec<Arc<Matrix<T>>>;
             if out.dims[0] == 1{
                 if out.dims[0] != dim[0]{
                     sub_out = (0..dim[0]).map(|_| subs[0].clone()).collect();
                 }else {
-                    sub_out = subs;
+                    sub_out = subs.clone();
                 }
             }else {
                 if out.dims[0] != dim[0]{
                     return Err(MismatchSizeError);
                 }else {
-                    sub_out = subs;
+                    sub_out = subs.clone();
                 }
             }
-            sub_out = sub_out.iter().map(|s| s.try_broadcast(&dim[1..].to_vec())).collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+
+            if sub_out.len() == 1{
+                sub_out = vec![sub_out[0].try_broadcast(Arc::new(dim[1..].to_vec()))?];
+            } else {
+                let mut handles = Vec::new();
+                for s in sub_out.iter(){
+                    let s_new = s.clone();
+                    let dim_new =Arc::new(dim[1..].to_vec());
+                    handles.push(thread::spawn(move || s_new.try_broadcast(dim_new)));
+                }
+                sub_out = Vec::new();
+                for h in handles{
+                    match h.join(){
+                        Ok(res) => sub_out.push(res?),
+                        Err(_) => return Err(ThreadingError)
+                    }
+                };
+            }
             let mut dims_out = sub_out[0].get_dims();
             dims_out.insert(0, sub_out.len());
-            Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
+            Ok(Arc::new(Matrix::new_with_sub_matrices(dims_out, sub_out)))
         }
         else {
             Err(MatrixCompositionError)
         }
     }
 
-    fn try_max_pool(&self, kernel_shape: &Vec<usize>, strides: Option<&Vec<usize>>, auto_pad: Option<&String>, pads: Option<&Vec<usize>>, ceil_mode: Option<&usize>, dilations: Option<&Vec<usize>>, storage_order: Option<&usize>) -> Result<Self::Output, MatrixOperationError> {
+    fn try_max_pool(&self, kernel_shape: Arc<Vec<usize>>, strides: Arc<Option<Vec<usize>>>, auto_pad: Arc<Option<String>>, pads: Arc<Option<Vec<usize>>>, ceil_mode: Arc<Option<usize>>, dilations: Arc<Option<Vec<usize>>>, storage_order: Arc<Option<usize>>) -> Result<Self::Output, MatrixOperationError> {
         if kernel_shape.len() != 2{
             return Err(NotImplementedError);
         }
-        if let Some(a) = auto_pad {
+        if let Some(a) = auto_pad.as_ref() {
             if a != "NOTSET"{
                 return Err(NotImplementedError);
             }
         }
-        if let Some(p) = pads {
+        if let Some(p) = pads.as_ref() {
             if p.iter().any(|pad| *pad != 0){
                 return Err(NotImplementedError);
             }
         }
-        if let Some(c) = ceil_mode{
+        if let Some(c) = ceil_mode.as_ref() {
             if *c != 0 {
                 return Err(NotImplementedError);
             }
         }
-        if let Some(d) = dilations{
+        if let Some(d) = dilations.as_ref() {
             if d.iter().any(|dil| *dil != 1){
                 return Err(NotImplementedError);
             }
         }
-        if let Some(s) = storage_order{
+        if let Some(s) = storage_order.as_ref() {
             if *s != 0 {
                 return Err(NotImplementedError);
             }
         }
 
         if let Some(m2d) = &self.matrix2d{
-            let m2d_out = m2d.try_max_pool(kernel_shape, strides, auto_pad, pads, None, None, None)?;
-            Ok(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out))
+            let m2d_out = m2d.try_max_pool(kernel_shape, strides, auto_pad, pads, ceil_mode, dilations, storage_order)?;
+            Ok(Arc::new(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out)))
         }
         else if let Some(sub) = &self.sub_matrices{
-            let sub_out = sub.iter().map(|s| s.try_max_pool(kernel_shape, strides, auto_pad, pads, None, None, None)).collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+            let mut sub_out = Vec::new();
+            if sub.len() == 1{
+                sub_out.push(sub[0].try_max_pool(kernel_shape, strides, auto_pad, pads, ceil_mode, dilations, storage_order)?)
+            } else {
+                let mut handles = Vec::new();
+                for s in sub.iter(){
+                    let s_new = s.clone();
+                    let kernel_shape_new = kernel_shape.clone();
+                    let strides_new = strides.clone();
+                    let auto_pads_new = auto_pad.clone();
+                    let pads_new = pads.clone();
+                    let ceil_mode_new = ceil_mode.clone();
+                    let dilations_new = dilations.clone();
+                    let storage_order_new = storage_order.clone();
+                    handles.push(
+                        thread::spawn(move || s_new.try_max_pool(kernel_shape_new, strides_new, auto_pads_new, pads_new, ceil_mode_new, dilations_new, storage_order_new)));
+                }
+                for h in handles{
+                    match h.join(){
+                        Ok(res) => sub_out.push(res?),
+                        Err(_) => return Err(ThreadingError)
+                    }
+                };
+            }
+
+            // let sub_out = sub.iter().map(|s| s.try_max_pool(kernel_shape, strides, auto_pad, pads, None, None, None)).collect::<Result<Vec<Arc<Matrix<T>>>, MatrixOperationError>>()?;
             let mut dims_out = sub_out[0].get_dims();
             dims_out.insert(0, sub_out.len());
-            Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
+            Ok(Arc::new(Matrix::new_with_sub_matrices(dims_out, sub_out)))
         }
         else {
             Err(VoidMatrixError)
@@ -592,24 +624,17 @@ impl<T: Numeric> TryOperation1 for Matrix<T>{
 }
 
 impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
-    type Output = Matrix<T>;
+    type Output = Arc<Matrix<T>>;
 
-    fn try_add(&self, other: &Matrix<T>) -> Result<Matrix<T>, MatrixOperationError> {
-        //if same len
-        // => if same value
-        //  => continue
-        // => try broadcast either same dim
-        //else
-        // => create dim(reshape)
-        // => try broadcast either to dim
-        fn try_broadcast_either<T: Numeric>(this: &Matrix<T> , other: &Matrix<T>) -> Result<(Matrix<T>, Matrix<T>), MatrixOperationError>{
-            let broadcast_dim = Matrix::<T>::get_dim_for_broadcast(&this.dims, &other.dims)?;
-            let m1 = this.try_broadcast(&broadcast_dim)?;
-            let m2 = other.try_broadcast(&broadcast_dim)?;
+    fn try_add(&self, other: &Matrix<T>) -> Result<Self::Output, MatrixOperationError> {
+        fn try_broadcast_either<T: Numeric>(this: &Matrix<T> , other: &Matrix<T>) -> Result<(Arc<Matrix<T>>, Arc<Matrix<T>>), MatrixOperationError>{
+            let broadcast_dim = Arc::new(Matrix::<T>::get_dim_for_broadcast(&this.dims, &other.dims)?);
+            let m1 = this.try_broadcast(broadcast_dim.clone())?;
+            let m2 = other.try_broadcast(broadcast_dim.clone())?;
             Ok((m1, m2))
         }
-        let mut m1 = Matrix::default();
-        let mut m2 = Matrix::default();
+        let mut m1 = Arc::new(Matrix::default());
+        let mut m2 = Arc::new(Matrix::default());
         let mut m1_ref = self;
         let mut m2_ref = other;
         if self.dims.len() == other.dims.len(){
@@ -626,13 +651,13 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
 
         if let (Some(m2d1), Some(m2d2)) = (&m1_ref.matrix2d, &m2_ref.matrix2d){
             let m2d_out = m2d1.try_add(m2d2)?;
-            Ok(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out))
+            Ok(Arc::new(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out)))
         }
         else if let (Some(sub1), Some(sub2)) = (&m1_ref.sub_matrices, &m2_ref.sub_matrices){
-            let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_add(s2)).collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+            let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_add(s2)).collect::<Result<Vec<Arc<Matrix<T>>>, MatrixOperationError>>()?;
             let mut dims_out = sub_out[0].get_dims();
             dims_out.insert(0, sub_out.len());
-            Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
+            Ok(Arc::new(Matrix::new_with_sub_matrices(dims_out, sub_out)))
         }
         else {
             Err(MatrixCompositionError)
@@ -645,13 +670,13 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
 
         if let (Some(m2d1), Some(m2d2)) = (&m1_ref.matrix2d, &m2_ref.matrix2d){
             let m2d_out = m2d1.try_mat_mul(m2d2)?;
-            Ok(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out))
+            Ok(Arc::new(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out)))
         }
         else if let (Some(sub1), Some(sub2)) = (&m1_ref.sub_matrices, &m2_ref.sub_matrices){
-            let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_mat_mul(s2)).collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+            let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_mat_mul(s2)).collect::<Result<Vec<Arc<Matrix<T>>>, MatrixOperationError>>()?;
             let mut dims_out = sub_out[0].get_dims();
             dims_out.insert(0, sub_out.len());
-            Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
+            Ok(Arc::new(Matrix::new_with_sub_matrices(dims_out, sub_out)))
         }
         else {
             Err(MatrixCompositionError)
@@ -722,7 +747,7 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
 
         if let (Some(m2d1), Some(m2d2)) = (&self.matrix2d, &kernel.matrix2d){
             let m2d_out = m2d1.try_conv(m2d2, kernel_shape, Some(&_strides), auto_pad, Some(&_pads), None, None)?;
-            Ok(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out))
+            Ok(Arc::new(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out)))
         }
         else if let (Some(sub1), Some(sub2)) = (&self.sub_matrices, &kernel.sub_matrices){
             match self.get_dims().len() {
@@ -733,17 +758,17 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
 
                     let sub_out = sub2.iter()
                         .map(|s2| sub1[0].try_conv(s2, kernel_shape, Some(&_strides), auto_pad, Some(&_pads), None, None))
-                        .collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+                        .collect::<Result<Vec<Arc<Matrix<T>>>, MatrixOperationError>>()?;
                     let mut dims_out = sub_out[0].get_dims();
                     dims_out.insert(0, sub_out.len());
-                    let mut matrix_out = Matrix::new_with_sub_matrices(dims_out.to_owned(), sub_out);
+                    let mut matrix_out = Arc::new(Matrix::new_with_sub_matrices(dims_out.to_owned(), sub_out));
                     matrix_out = matrix_out.try_reshape(&vec![dims_out[1], dims_out[0], dims_out[2], dims_out[3]], None)?;
                     Ok(matrix_out)
                 }
                 3 => {
                     let mut sub_out = sub1.iter().zip(sub2.iter())
                         .map(|(s1, s2)| s1.try_conv(s2, kernel_shape, Some(&_strides), auto_pad, Some(&_pads), None, None))
-                        .collect::<Result<Vec<Matrix<T>>, MatrixOperationError>>()?;
+                        .collect::<Result<Vec<Arc<Matrix<T>>>, MatrixOperationError>>()?;
                     if sub_out.len() > 1{
                         let mut start = sub_out[0].to_owned();
                         for  m in sub_out[1..].iter(){
@@ -753,7 +778,7 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
                     }
                     let mut dims_out = sub_out[0].get_dims();
                     dims_out.insert(0, sub_out.len());
-                    Ok(Matrix::new_with_sub_matrices(dims_out, sub_out))
+                    Ok(Arc::new(Matrix::new_with_sub_matrices(dims_out, sub_out)))
                 }
                 _ => {
                     Err(MatrixCompositionError)
@@ -773,16 +798,16 @@ impl<T: Numeric> TryOperation2<&Matrix<T>> for Matrix<T>{
 
 #[derive(Debug, Clone)]
 pub enum MatrixType{
-    IntMatrix(Matrix<i64>),
-    FloatMatrix(Matrix<f32>)
+    IntMatrix(Arc<Matrix<i64>>),
+    FloatMatrix(Arc<Matrix<f32>>)
 }
 
 impl MatrixType{
     pub fn new(dims: Vec<usize>, ints: Option<Vec<i64>>, floats: Option<Vec<f32>>) -> Self{
         if ints.is_some(){
-            IntMatrix(Matrix::new(dims, ints))
+            IntMatrix(Arc::new(Matrix::new(dims, ints)))
         } else if floats.is_some(){
-            FloatMatrix(Matrix::new(dims, floats))
+            FloatMatrix(Arc::new(Matrix::new(dims, floats)))
         } else {
             MatrixType::default()
         }
@@ -798,7 +823,7 @@ impl MatrixType{
 
 impl Default for MatrixType {
     fn default() -> Self {
-        MatrixType::IntMatrix(Matrix::default())
+        MatrixType::IntMatrix(Arc::new(Matrix::default()))
     }
 }
 
@@ -807,14 +832,14 @@ impl From<&TensorProto> for MatrixType {
         match tensor_proto.data_type.enum_value() {
             Ok(data_type) => {
                 match data_type{
-                    DataType::INT64 => IntMatrix(Matrix::new(
+                    DataType::INT64 => IntMatrix(Arc::new(Matrix::new(
                         tensor_proto.dims.iter().map(|d| *d as usize).collect(),
                         Some(tensor_proto.int64_data.to_owned())
-                    )),
-                    DataType::FLOAT => FloatMatrix(Matrix::new(
+                    ))),
+                    DataType::FLOAT => FloatMatrix(Arc::new(Matrix::new(
                         tensor_proto.dims.iter().map(|d| *d as usize).collect(),
                         Some(tensor_proto.float_data.to_owned())
-                    )),
+                    ))),
                     _ => panic!("Not supported data type")
                 }
             },
@@ -840,14 +865,14 @@ impl From<&ValueInfoProto> for MatrixType {
         match tensor.elem_type.enum_value() {
             Ok(data_type) => {
                 match data_type{
-                    DataType::INT64 => IntMatrix(Matrix::new(
+                    DataType::INT64 => IntMatrix(Arc::new(Matrix::new(
                         dims,
                         None
-                    )),
-                    DataType::FLOAT => FloatMatrix(Matrix::new(
+                    ))),
+                    DataType::FLOAT => FloatMatrix(Arc::new(Matrix::new(
                         dims,
                         None
-                    )),
+                    ))),
                     _ => panic!("Not supported data type")
                 }
             },
@@ -873,17 +898,17 @@ impl TryOperation1 for MatrixType{
         }
     }
 
-    fn try_broadcast(&self, dim: &Vec<usize>) -> Result<Self::Output, MatrixOperationError> {
+    fn try_broadcast(&self, dim: Arc<Vec<usize>>) -> Result<Self::Output, MatrixOperationError> {
         match &self {
             IntMatrix(matrix) => Ok(IntMatrix(matrix.try_broadcast(dim)?)),
             FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_broadcast(dim)?))
         }
     }
 
-    fn try_max_pool(&self, kernel_shape: &Vec<usize>, strides: Option<&Vec<usize>>, auto_pad: Option<&String>, pads: Option<&Vec<usize>>, ceil_mode: Option<&usize>, dilations: Option<&Vec<usize>>, storage_order: Option<&usize>) -> Result<Self::Output, MatrixOperationError> {
+    fn try_max_pool(&self, kernel_shape: Arc<Vec<usize>>, strides: Arc<Option<Vec<usize>>>, auto_pad: Arc<Option<String>>, pads: Arc<Option<Vec<usize>>>, ceil_mode: Arc<Option<usize>>, dilations: Arc<Option<Vec<usize>>>, storage_order: Arc<Option<usize>>) -> Result<Self::Output, MatrixOperationError> {
         match &self {
-            IntMatrix(matrix) => Ok(IntMatrix(matrix.try_max_pool(kernel_shape, strides, auto_pad, pads, None, None, None)?)),
-            FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_max_pool(kernel_shape, strides, auto_pad, pads, None, None, None)?))
+            IntMatrix(matrix) => Ok(IntMatrix(matrix.try_max_pool(kernel_shape, strides, auto_pad, pads, ceil_mode, dilations, storage_order)?)),
+            FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_max_pool(kernel_shape, strides, auto_pad, pads, ceil_mode, dilations, storage_order)?))
         }
     }
 }
@@ -945,7 +970,6 @@ impl TryOperation2<&Self> for MatrixType {
 
 impl TryOperation1Attributes for MatrixType{
     fn try_relu_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
-        println!("EHi attr");
         self.try_relu()
     }
 
@@ -976,7 +1000,7 @@ impl TryOperation1Attributes for MatrixType{
         if kernel_shape.len() == 0{
             Err(MissingFieldError)
         } else {
-            self.try_max_pool(&kernel_shape, Option::from(&strides), Option::from(&auto_pad), Option::from(&pads), Option::from(&ceil_mode), Option::from(&dilations), Option::from(&storage_order))
+            self.try_max_pool(Arc::new(kernel_shape), Arc::new(strides), Arc::new(auto_pad), Arc::new(pads), Arc::new(ceil_mode), Arc::new(dilations), Arc::new(storage_order))
         }
     }
 }
