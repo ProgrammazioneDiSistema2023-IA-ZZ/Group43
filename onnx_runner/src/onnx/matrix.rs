@@ -1,15 +1,17 @@
 use std::error::Error;
+use std::f32::consts::E;
 use std::fmt::{Debug, Display, Formatter, write};
 use std::ops::{Add, Mul};
 use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use crate::onnx::matrix::MatrixType::{FloatMatrix, IntMatrix};
-use crate::onnx::matrix::MatrixOperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError, MissingFieldError, InvalidArgumentError, MissingInputError, ThreadingError };
+use crate::onnx::matrix::MatrixOperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError, MissingFieldError, InvalidArgumentError, MissingInputError, ThreadingError, FunctionNotImplementedError };
 use crate::parser::onnx_model::onnx_proto3::{AttributeProto, TensorProto, ValueInfoProto};
 use crate::parser::onnx_model::onnx_proto3::tensor_proto::DataType;
 use crate::parser::onnx_model::onnx_proto3::tensor_shape_proto::dimension::Value::{DimParam, DimValue};
 use crate::parser::onnx_model::onnx_proto3::type_proto::Value;
+
 
 #[derive(Debug)]
 pub enum MatrixOperationError {
@@ -23,6 +25,7 @@ pub enum MatrixOperationError {
     InvalidArgumentError,
     MissingInputError,
     ThreadingError,
+    FunctionNotImplementedError,
 }
 
 impl Error for MatrixOperationError {}
@@ -40,6 +43,7 @@ impl Display for MatrixOperationError {
             InvalidArgumentError => write!(f, "Invalid argument"),
             MissingInputError => write!(f, "Missing input"),
             ThreadingError => write!(f, "Threading error"),
+            FunctionNotImplementedError => write!(f, "Function not yet implemented error")
         }
     }
 }
@@ -71,6 +75,14 @@ pub trait TryOperation1{
     fn try_broadcast(&self, dim: Arc<Vec<usize>>) -> Result<Self::Output, MatrixOperationError>;
 
     fn try_max_pool(&self, kernel_shape: Arc<Vec<usize>>, strides: Arc<Option<Vec<usize>>>, auto_pad: Arc<Option<String>>, pads: Arc<Option<Vec<usize>>>, ceil_mode: Arc<Option<usize>>, dilations: Arc<Option<Vec<usize>>>, storage_order: Arc<Option<usize>>) -> Result<Self::Output, MatrixOperationError>;
+
+    fn try_global_max_pool(&self) -> Result<Self::Output, MatrixOperationError>;
+}
+
+pub trait TryOperation1FloatOnly{
+    type Output;
+
+    fn try_softmax(&self, axis: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError>;
 }
 
 pub trait TryOperation2<T>{
@@ -81,12 +93,24 @@ pub trait TryOperation2<T>{
     fn try_mat_mul(&self, other: T) -> Result<Self::Output, MatrixOperationError>;
 
     fn try_conv(&self, kernel: T, kernel_shape: Arc<Vec<usize>>, strides: Arc<Option<Vec<usize>>>, auto_pad: Arc<Option<String>>, pads: Arc<Option<Vec<usize>>>, group: Arc<Option<usize>>, dilations: Arc<Option<Vec<usize>>>) -> Result<Self::Output, MatrixOperationError>;
+
+    fn try_concat(&self, other: T, axis: Arc<i64>) -> Result<Self::Output, MatrixOperationError>;
+}
+
+pub trait TryOperation2FloatOnly<T>{
+    type Output;
+
+    fn try_dropout(&self, ratio: T, seed: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError>;
 }
 
 pub trait TryOperation1Attributes{
     fn try_relu_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
 
     fn try_max_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
+
+    fn try_global_max_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
+
+    fn try_softmax_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
 }
 
 pub trait TryOperation2Attributes{
@@ -99,6 +123,10 @@ pub trait TryOperation2Attributes{
     fn try_conv_attributes(&self, kernel: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
 
     fn try_reshape_attributes(&self, dim: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
+
+    fn try_dropout_attributes(&self, ratio: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
+
+    fn try_concat_attributes(&self, other: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -243,6 +271,21 @@ impl<T: Numeric> TryOperation1 for Matrix2D<T>{
             Some(data_out)
         ))
     }
+
+    fn try_global_max_pool(&self) -> Result<Self::Output, MatrixOperationError> {
+        let kernel_shape = Arc::new(self.get_dims());
+        let strides = Arc::new(None);
+        let auto_pad = Arc::new(None);
+        let pads = Arc::new(None);
+        let ceil_mode = Arc::new(None);
+        let dilations = Arc::new(None);
+        let storage_order = Arc::new(None);
+        self.try_max_pool(kernel_shape, strides, auto_pad, pads, ceil_mode, dilations, storage_order)
+    }
+    //
+    // fn try_softmax(&self, axis: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError> {
+    //     Err(NotImplementedError)
+    // }
 }
 
 impl<T: Numeric> TryOperation2<&Matrix2D<T>> for Matrix2D<T>{
@@ -319,6 +362,45 @@ impl<T: Numeric> TryOperation2<&Matrix2D<T>> for Matrix2D<T>{
         Ok(Matrix2D::new(
             (self.rows - kernel.rows + _pads[0] + _pads[1]) / _strides[0] + 1,
             (self.cols - kernel.cols + _pads[2] + _pads[3]) / _strides[1] + 1,
+            Some(data_out)
+        ))
+    }
+
+    fn try_concat(&self, other: &Matrix2D<T>, axis: Arc<i64>) -> Result<Self::Output, MatrixOperationError> {
+        let data1 = self.get_data_or_error()?;
+        let data2 = other.get_data_or_error()?;
+        let mut data_out = Vec::new();
+        let mut rows = self.rows;
+        let mut cols = self.cols;
+        match axis.as_ref() {
+            0 => {
+                if self.cols != other.cols{
+                    return Err(MismatchSizeError);
+                }
+                data_out = data1.iter().chain(data2.iter()).map(|d| *d).collect();
+                rows = self.rows + other.rows;
+            },
+            1 => {
+                if self.rows != other.rows{
+                    return Err(MismatchSizeError);
+                }
+                for r in 0..self.rows{
+                    let mut r_id = r * self.cols;
+                    for c in 0..self.cols{
+                        data_out.push(data1[r_id + c]);
+                    }
+                    r_id = r * other.cols;
+                    for c in 0..other.cols{
+                        data_out.push(data2[r_id + c]);
+                    }
+                }
+                cols = self.cols + other.cols;
+            },
+            _ => return Err(InvalidArgumentError)
+        };
+        Ok(Matrix2D::new(
+            rows,
+            cols,
             Some(data_out)
         ))
     }
@@ -623,6 +705,70 @@ impl<T: Numeric> TryOperation1 for Matrix<T>{
             Err(VoidMatrixError)
         }
     }
+
+    fn try_global_max_pool(&self) -> Result<Self::Output, MatrixOperationError> {
+        if let Some(m2d) = &self.matrix2d{
+            let m2d_out = m2d.try_global_max_pool()?;
+            Ok(Arc::new(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out)))
+        }
+        else if let Some(sub) = &self.sub_matrices{
+            let mut sub_out = Vec::new();
+            if sub.len() == 1{
+                sub_out.push(sub[0].try_global_max_pool()?)
+            } else {
+                let mut handles = Vec::new();
+                for s in sub.iter(){
+                    let s_new = s.clone();
+                    handles.push(
+                        thread::spawn(move || s_new.try_global_max_pool()));
+                }
+                for h in handles{
+                    match h.join(){
+                        Ok(res) => sub_out.push(res?),
+                        Err(_) => return Err(ThreadingError)
+                    }
+                };
+            }
+
+            let mut dims_out = sub_out[0].get_dims();
+            dims_out.insert(0, sub_out.len());
+            Ok(Arc::new(Matrix::new_with_sub_matrices(dims_out, sub_out)))
+        }
+        else {
+            Err(VoidMatrixError)
+        }
+    }
+
+    // fn try_softmax(&self, axis: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError> {
+    //     if let Some(a) = axis.as_ref() {
+    //         if *a != 1 {
+    //             return Err(NotImplementedError);
+    //         }
+    //     }
+    //     let data = self.get_data_or_error()?;
+    //     let sum = data.iter().fold(T::default(), |acc, val| acc + E.powf(val));
+    //     let data_out = data.iter().map(|d| d.exp()/sum).collect();
+    //     Ok(Arc::new(Matrix::new(self.get_dims(), Some(data_out))))
+    // }
+}
+
+impl TryOperation1FloatOnly for Arc<Matrix<f32>> {
+    type Output = Arc<Matrix<f32>>;
+
+    fn try_softmax(&self, axis: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError> {
+        if let Some(a) = axis.as_ref() {
+            if *a != 1 {
+                return Err(NotImplementedError);
+            }
+        }
+        if self.dims.len() > 2 && self.dims[0] != 1{
+            return Err(NotImplementedError);
+        }
+        let data = self.get_data_or_error()?;
+        let sum = data.iter().fold(f32::default(), |acc, val| acc + val.exp());
+        let data_out = data.iter().map(|d| d.exp()/sum).collect();
+        Ok(Arc::new(Matrix::new(self.get_dims(), Some(data_out))))
+    }
 }
 
 impl<T: Numeric> TryOperation2<Arc<Matrix<T>>> for Arc<Matrix<T>>{
@@ -875,8 +1021,62 @@ impl<T: Numeric> TryOperation2<Arc<Matrix<T>>> for Arc<Matrix<T>>{
         }
 
     }
+
+    fn try_concat(&self, other: Arc<Matrix<T>>, axis: Arc<i64>) -> Result<Self::Output, MatrixOperationError> {
+        let mut m1 = self.clone();
+        let mut m2 = other;
+
+        if ! m1.dims.iter().zip(m2.dims.iter()).enumerate().all(|(i, (d1, d2))| (i as i64) != *axis || d1 == d2){
+            return Err(MismatchSizeError);
+        }
+
+        if let (Some(m2d1), Some(m2d2)) = (&m1.matrix2d, &m2.matrix2d){
+            let m2d_out = m2d1.try_concat(m2d2, axis)?;
+            Ok(Arc::new(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out)))
+        }
+        else if let (Some(sub1), Some(sub2)) = (&m1.sub_matrices, &m2.sub_matrices){
+            let mut sub_out = Vec::new();
+            if *axis == 0{
+                sub1.iter().for_each(|s| sub_out.push(s.clone()));
+                sub2.iter().for_each(|s| sub_out.push(s.clone()));
+            } else {
+                if sub1.len() == 1 && sub2.len() == 1{
+                    sub_out.push(sub1[0].try_concat(sub2[0].clone(), Arc::new(*axis - 1))?)
+                } else {
+                    let mut handles = Vec::new();
+                    for (s1, s2) in sub1.iter().zip(sub2.iter()){
+                        let s1_new = s1.clone();
+                        let s2_new = s2.clone();
+                        let axis_new = Arc::new(*axis - 1);
+                        handles.push(thread::spawn(move || s1_new.try_concat(s2_new, axis_new)));
+                    }
+                    for h in handles{
+                        match h.join(){
+                            Ok(res) => sub_out.push(res?),
+                            Err(_) => return Err(ThreadingError)
+                        }
+                    };
+                }
+            }
+
+            // let sub_out = sub1.iter().zip(sub2.iter()).map(|(s1, s2)| s1.try_mat_mul(s2)).collect::<Result<Vec<Arc<Matrix<T>>>, MatrixOperationError>>()?;
+            let mut dims_out = sub_out[0].get_dims();
+            dims_out.insert(0, sub_out.len());
+            Ok(Arc::new(Matrix::new_with_sub_matrices(dims_out, sub_out)))
+        }
+        else {
+            Err(MatrixCompositionError)
+        }
+    }
 }
 
+impl TryOperation2FloatOnly<Arc<Matrix<f32>>> for Arc<Matrix<f32>> {
+    type Output = Arc<Matrix<f32>>;
+
+    fn try_dropout(&self, ratio: Arc<Matrix<f32>>, seed: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError> {
+        Ok(self.clone())
+    }
+}
 #[derive(Debug, Clone)]
 pub enum MatrixType{
     IntMatrix(Arc<Matrix<i64>>),
@@ -918,8 +1118,20 @@ impl From<&TensorProto> for MatrixType {
                         Some(tensor_proto.int64_data.to_owned())
                     ))),
                     DataType::FLOAT => FloatMatrix(Arc::new(Matrix::new(
-                        tensor_proto.dims.iter().map(|d| *d as usize).collect(),
-                        Some(tensor_proto.float_data.to_owned())
+                            if tensor_proto.dims.len() == 0{
+                                vec![1]
+                            } else {
+                                tensor_proto.dims.iter().map(|d| *d as usize).collect()
+                            },
+                        Some(
+                            if tensor_proto.float_data.len() > 0{
+                                tensor_proto.float_data.to_owned()
+                            } else {
+                                tensor_proto.raw_data.chunks_exact(4)
+                                    .map(TryInto::try_into).map(Result::unwrap).map(f32::from_le_bytes)
+                                    .collect::<Vec<f32>>()
+                            }
+                        )
                     ))),
                     _ => panic!("Not supported data type")
                 }
@@ -992,6 +1204,24 @@ impl TryOperation1 for MatrixType{
             FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_max_pool(kernel_shape, strides, auto_pad, pads, ceil_mode, dilations, storage_order)?))
         }
     }
+
+    fn try_global_max_pool(&self) -> Result<Self::Output, MatrixOperationError> {
+        match &self {
+            IntMatrix(matrix) => Ok(IntMatrix(matrix.try_global_max_pool()?)),
+            FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_global_max_pool()?))
+        }
+    }
+}
+
+impl TryOperation1FloatOnly for MatrixType {
+    type Output = Self;
+
+    fn try_softmax(&self, axis: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError> {
+        match &self {
+            IntMatrix(matrix) => Err(MismatchTypeError),
+            FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_softmax(axis)?))
+        }
+    }
 }
 
 impl TryOperation2<&Self> for MatrixType {
@@ -1047,8 +1277,42 @@ impl TryOperation2<&Self> for MatrixType {
             }
         }
     }
+
+    fn try_concat(&self, other: &Self, axis: Arc<i64>) -> Result<Self::Output, MatrixOperationError> {
+        match &self {
+            IntMatrix(matrix) => {
+                match other {
+                    IntMatrix(other_matrix) => Ok(IntMatrix(matrix.try_concat(other_matrix.clone(), axis)?)),
+                    FloatMatrix(_) => Err(MatrixOperationError::MismatchTypeError)
+                }
+            },
+            FloatMatrix(matrix) => {
+                match other {
+                    IntMatrix(_) => Err(MatrixOperationError::MismatchSizeError),
+                    FloatMatrix(other_matrix) => Ok(FloatMatrix(matrix.try_concat(other_matrix.clone(), axis)?))
+                }
+            }
+        }
+    }
 }
 
+impl TryOperation2FloatOnly<&Self> for MatrixType {
+    type Output = Self;
+
+    fn try_dropout(&self, ratio: &Self, seed: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError> {
+        match &self {
+            IntMatrix(matrix) => {
+                Err(MatrixOperationError::MismatchTypeError)
+            },
+            FloatMatrix(matrix) => {
+                match ratio {
+                    IntMatrix(_) => Err(MatrixOperationError::MismatchSizeError),
+                    FloatMatrix(other_matrix) => Ok(FloatMatrix(matrix.try_dropout(other_matrix.clone(), seed)?))
+                }
+            }
+        }
+    }
+}
 impl TryOperation1Attributes for MatrixType{
     fn try_relu_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
         self.try_relu()
@@ -1083,6 +1347,25 @@ impl TryOperation1Attributes for MatrixType{
         } else {
             self.try_max_pool(Arc::new(kernel_shape), Arc::new(strides), Arc::new(auto_pad), Arc::new(pads), Arc::new(ceil_mode), Arc::new(dilations), Arc::new(storage_order))
         }
+    }
+
+    fn try_global_max_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
+        self.try_global_max_pool()
+    }
+
+    fn try_softmax_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
+        let mut axis: Option<i64> = None;
+        let mut have_invalid_argument = false;
+        attributes.iter().for_each(|a| {
+            match a.name.as_str() {
+                "axis" => axis = Some(a.i ),
+                _ => have_invalid_argument = true
+            }
+        });
+        if have_invalid_argument {
+            return Err(InvalidArgumentError);
+        }
+        self.try_softmax(Arc::new(axis))
     }
 }
 
@@ -1148,5 +1431,35 @@ impl TryOperation2Attributes for MatrixType {
             },
             FloatMatrix(_) => Err(MismatchTypeError)
         }
+    }
+
+    fn try_dropout_attributes(&self, ratio: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError> {
+        let mut seed: Option<i64> = None;
+        let mut have_invalid_argument = false;
+        attributes.iter().for_each(|a| {
+            match a.name.as_str() {
+                "seed" => seed = Some(a.i),
+                _ => have_invalid_argument = true
+            }
+        });
+        if have_invalid_argument {
+            return Err(InvalidArgumentError);
+        }
+        self.try_dropout(ratio, Arc::new(seed))
+    }
+
+    fn try_concat_attributes(&self, other: &Self, attributes: &Vec<AttributeProto>) -> Result<Self::Output, MatrixOperationError> {
+        let mut axis: i64 = 0;
+        let mut have_invalid_argument = false;
+        attributes.iter().for_each(|a| {
+            match a.name.as_str() {
+                "axis" => axis = a.i,
+                _ => have_invalid_argument = true
+            }
+        });
+        if have_invalid_argument {
+            return Err(InvalidArgumentError);
+        }
+        self.try_concat(other, Arc::new(axis))
     }
 }

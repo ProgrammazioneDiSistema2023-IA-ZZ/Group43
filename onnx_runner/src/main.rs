@@ -2,8 +2,9 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::{Add, Mul};
 use std::string::String;
-use image::DynamicImage::ImageLuma8;
-use onnx_runner::onnx::matrix::{Matrix, MatrixOperationError, MatrixType, Numeric, TryOperation1, TryOperation2};
+use std::sync::Arc;
+use image::DynamicImage::{ImageLuma8, ImageRgb8};
+use onnx_runner::onnx::matrix::{Matrix, MatrixOperationError, MatrixType, Numeric, TryOperation1, TryOperation1FloatOnly, TryOperation2, TryOperation2FloatOnly};
 use onnx_runner::parser::parser::Parser;
 use onnx_runner::onnx::onnx_graph::OnnxGraph;
 use image::io::Reader as ImageReader;
@@ -14,12 +15,13 @@ fn main() {
     println!("Welcome to the onnx runner!");
     // test_parser();
     //test_onnx();
-    // test_tmp();
+    //test_tmp();
     // test_matrix();
     //verify_op();
     // test_broadcast();
     // test_img();
-    test_inference().unwrap();
+    // test_inference().unwrap();
+    //test_new_op();
 }
 
 fn test_parser() {
@@ -31,16 +33,20 @@ fn test_parser() {
 }
 
 fn test_onnx() {
-    let onnx_file = "mnist-12";
+    let onnx_file = "squeezenet1.0-12";
     let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
-    let onnx = OnnxGraph::try_from(onnx_model).unwrap();
-    println!("{}", onnx);
-
-    println!("{:?}", onnx.init_nodes[3].borrow().data);
+    let onnx = OnnxGraph::try_from(onnx_model);
+    // println!("{:?}", onnx);
+    if let Ok(o) = onnx{
+        println!("{:?}", o.init_nodes[0].borrow().data)
+    }
+    // println!("{:?}", onnx.init_nodes[3].borrow().data);
 }
 
 fn test_tmp(){
     let onnx_file = "googlenet-12";
+    let onnx_model = Parser::extract_from_onnx_file(onnx_file).expect("Error in onnx file parsing");
+    Parser::store_to_json_file(onnx_file, & onnx_model).expect("Error in storing json");
     let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
     let result = onnx_model.graph.node.iter().all(|n| n.output.len() == 1);
     if result{
@@ -77,21 +83,67 @@ fn test_matrix() {
     println!("{:?}", m2.unwrap());
 }
 
-// fn verify_op(){
-//     let files_name = vec![/*"bvlcalexnet-12-qdq", "googlenet-12", "mnist-12", "mobilenetv2-12", "resnet18-v2-7",*/ "squeezenet1.0-12", "super-resolution-10"];
-//     for name in files_name{
-//         println!("{}", name);
-//         let onnx_model = Parser::extract_from_json_file(name).expect("Error in json file parsing");
-//         let onnx = OnnxGraph::from(onnx_model);
-//         let mut op = HashSet::new();
-//         for fun in onnx.fun_nodes{
-//             op.insert(fun.borrow().get_operation_name().to_owned());
-//         }
-//         let mut op_out = op.iter().collect::<Vec<&String>>();
-//         op_out.sort();
-//         println!("{:?}", op_out);
-//     }
-// }
+fn verify_op(){
+    let files_name = vec!["candy-9"];
+    for name in files_name{
+        println!("{}", name);
+        let onnx_model = Parser::extract_from_onnx_file(name).expect("Error in onnx file parsing");
+        Parser::store_to_json_file(name, & onnx_model).expect("Error in storing json");
+        let onnx_model = Parser::extract_from_json_file(name).expect("Error in json file parsing");
+        let onnx = OnnxGraph::try_from(onnx_model).expect("damn");
+        let mut op = HashSet::new();
+        for fun in onnx.fun_nodes{
+            op.insert(fun.borrow().get_operation_name().to_owned());
+        }
+        let mut op_out = op.iter().collect::<Vec<&String>>();
+        op_out.sort();
+        println!("{:?}", op_out);
+    }
+}
+
+fn test_new_op(){
+    fn globalmp<T: Numeric>(m1: &Matrix<T>) {
+        println!("glodal max pool");
+        println!("M1 => {:?}", m1);
+        let res = m1.try_global_max_pool().unwrap();
+        println!("RES => {:?}", res);
+    }
+    let m1 = Matrix::new(vec![1, 2, 2, 3], Some(vec![1, 0, 2, 0, 3, -1, 1, 0, 5, 0, 3, -8]));
+    globalmp(&m1);
+
+    fn softmax(m1: &Matrix<f32>) {
+        let m1 = Arc::new(m1.to_owned());
+        println!("softmax");
+        println!("M1 => {:?}", m1);
+        let res = m1.try_softmax(Arc::new(None)).unwrap();
+        println!("RES => {:?}", res);
+    }
+    let m2 = Matrix::new(vec![2, 3], Some(vec![1.1, 0.1, 2.1, 0.1, 3.1, -1.1]));
+    softmax(&m2);
+
+    fn dropout(m1: &Matrix<f32>) {
+        let m1 = Arc::new(m1.to_owned());
+        println!("dropout");
+        println!("M1 => {:?}", m1);
+        let res = m1.try_dropout(Arc::new(Matrix::default()), Arc::new(None)).unwrap();
+        println!("RES => {:?}", res);
+    }
+    let m2 = Matrix::new(vec![2, 3], Some(vec![1.1, 0.1, 2.1, 0.1, 3.1, -1.1]));
+    dropout(&m2);
+    fn cat<T: Numeric>(m1: &Matrix<T>, m2: &Matrix<T>) {
+        let m1 = Arc::new(m1.to_owned());
+        let m2 = Arc::new(m2.to_owned());
+
+        println!("CONCAT");
+        println!("M1 => {:?}", m1);
+        println!("M2 => {:?}", m2);
+        let res = m1.try_concat(m2, Arc::new(1)).unwrap();
+        println!("RES => {:?}", res);
+    }
+    let m3 = Matrix::new(vec![1, 1, 2, 3], Some(vec![1, 0, 2, 0, 3, -1]));
+    let m4 = Matrix::new(vec![1, 1, 2, 3], Some(vec![4, 1, -2, 2, 0, 3]));
+    cat(&m3, &m4);
+}
 
 // fn test_broadcast() {
 //     fn add<T: Numeric>(m1: &Matrix<T>, m2: &Matrix<T>) {
@@ -190,6 +242,24 @@ fn test_inference() -> Result<(), MatrixOperationError>{
     println!("MatMul2Data {:?}", onnx.fun_nodes[10].borrow_mut().try_calculate());
     println!("AddData {:?}", onnx.fun_nodes[11].borrow_mut().try_calculate());
     // println!("Out {:?}", onnx.output_nodes[0].borrow_mut().try_compute_all());
+
+    Ok(())
+}
+
+fn test_squeeze() -> Result<(), MatrixOperationError>{
+    let onnx_file = "squeezenet1.0-12";
+    let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
+    let onnx = OnnxGraph::try_from(onnx_model)?;
+
+    let img = ImageReader::open("car_resized.png").unwrap().decode().unwrap();
+    let input_matrix;
+    match img {
+        ImageRgb8(ref rgb) => {
+            let input_data = rgb.iter().map(|p| (*p as f32) / 255.0).collect::<Vec<f32>>();
+            input_matrix = MatrixType::new(vec![1, 3, img.height() as usize, img.width() as usize], None, Some(input_data));
+        },
+        _ => return Err(MismatchTypeError)
+    }
 
     Ok(())
 }

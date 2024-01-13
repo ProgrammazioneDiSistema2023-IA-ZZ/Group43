@@ -4,7 +4,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::rc::{Rc, Weak};
 use protobuf::descriptor::file_options::OptimizeMode::SPEED;
 use crate::onnx::matrix::{Data, Matrix, MatrixOperationError, MatrixType, TryOperation1, TryOperation1Attributes, TryOperation2, TryOperation2Attributes};
-use crate::onnx::matrix::MatrixOperationError::{InvalidArgumentError, MismatchSizeError, MismatchTypeError, MissingInputError, NotImplementedError, VoidMatrixError};
+use crate::onnx::matrix::MatrixOperationError::{FunctionNotImplementedError, InvalidArgumentError, MismatchSizeError, MismatchTypeError, MissingInputError, NotImplementedError, VoidMatrixError};
 use crate::parser::onnx_model::onnx_proto3::{AttributeProto, NodeProto, TensorProto, ValueInfoProto};
 
 //Common trait//////////////////////////////////////////////////////////////////////////////
@@ -230,7 +230,11 @@ impl TryFrom<&NodeProto> for FunctionNode {
             "MatMul" => op2 = Some(MatrixType::try_mat_mul_attributes),
             "Conv" => op2 = Some(MatrixType::try_conv_attributes),
             "Reshape" => op2 = Some(MatrixType::try_reshape_attributes),
-            _ => return Err(NotImplementedError)
+            "Concat" => op2 = None,
+            "Dropout" => op1 = None,
+            "GlobalAveragePool" => op1 = None,
+            "Softmax" => op1 = None,
+            _ => return Err(FunctionNotImplementedError)
         };
         Ok(FunctionNode::new(
             format!("{}_{}",node_proto.op_type, node_proto.name),
