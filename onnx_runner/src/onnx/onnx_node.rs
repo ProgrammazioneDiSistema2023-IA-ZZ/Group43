@@ -112,12 +112,13 @@ pub struct FunctionNode{
     data: Option<MatrixType>,
     pub op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
     pub op2: Option<fn(&MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
+    pub op3: Option<fn(&MatrixType, &MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
     attributes: Vec<AttributeProto>,
 }
 
 
 impl FunctionNode {
-    fn new(name: String, op_type: String, inputs_name: Vec<String>, outputs_name: Vec<String>, data: Option<MatrixType>, op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>, op2: Option<fn(&MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>, attributes: Vec<AttributeProto>) -> Self{
+    fn new(name: String, op_type: String, inputs_name: Vec<String>, outputs_name: Vec<String>, data: Option<MatrixType>, op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>, op2: Option<fn(&MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>, op3: Option<fn(&MatrixType, &MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>, attributes: Vec<AttributeProto>) -> Self{
         FunctionNode{
             node_name: name,
             inputs: Vec::default(),
@@ -128,6 +129,7 @@ impl FunctionNode {
             data: data,
             op1: op1,
             op2: op2,
+            op3: op3,
             attributes: attributes,
         }
     }
@@ -192,7 +194,12 @@ impl HaveOut for FunctionNode {
             if inputs_data.len() == 2 {
                 self.data = Some(op2(&inputs_data[0], &inputs_data[1], &self.attributes)?);
             }
+        } else if let Some(op3) = self.op3{
+            if inputs_data.len() == 3 {
+                self.data = Some(op3(&inputs_data[0], &inputs_data[1], &inputs_data[2], &self.attributes)?);
+            }
         }
+
 
         if self.data.is_some(){
             Ok(&self.data.as_ref().unwrap())
@@ -223,17 +230,24 @@ impl TryFrom<&NodeProto> for FunctionNode {
     fn try_from(node_proto: &NodeProto) -> Result<Self, Self::Error> {
         let mut op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>> = None;
         let mut op2: Option<fn(&MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>> = None;
+        let mut op3: Option<fn(&MatrixType, &MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>> = None;
         match node_proto.op_type.as_str() {
             "Relu" => op1 = Some(MatrixType::try_relu_attributes),
             "MaxPool" => op1 = Some(MatrixType::try_max_pool_attributes),
+            "GlobalAveragePool" => op1 = Some(MatrixType::try_global_max_pool_attributes),
+            "Softmax" => op1 = Some(MatrixType::try_softmax_attributes),
             "Add" => op2 = Some(MatrixType::try_add_attributes),
             "MatMul" => op2 = Some(MatrixType::try_mat_mul_attributes),
-            "Conv" => op2 = Some(MatrixType::try_conv_attributes),
+            "Conv" => {
+                if node_proto.input.len() == 2{
+                    op2 = Some(MatrixType::try_conv2_attributes);
+                } else {
+                    op3 = Some(MatrixType::try_conv3_attributes);
+                }
+            }
             "Reshape" => op2 = Some(MatrixType::try_reshape_attributes),
-            "Concat" => op2 = None,
-            "Dropout" => op1 = None,
-            "GlobalAveragePool" => op1 = None,
-            "Softmax" => op1 = None,
+            "Concat" => op2 = Some(MatrixType::try_concat_attributes),
+            "Dropout" => op2 = Some(MatrixType::try_dropout_attributes),
             _ => return Err(FunctionNotImplementedError)
         };
         Ok(FunctionNode::new(
@@ -244,6 +258,7 @@ impl TryFrom<&NodeProto> for FunctionNode {
             None,
             op1,
             op2,
+            op3,
             node_proto.attribute.clone()
         ))
     }
