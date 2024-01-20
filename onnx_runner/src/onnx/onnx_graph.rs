@@ -97,11 +97,11 @@ impl TryFrom<ModelProto> for OnnxGraph{
         let secondaries_roots = fun_nodes.iter().filter_map(|node| {
             if node.borrow().get_inputs().iter().any(|n| {
                 match n.upgrade().unwrap().borrow().as_any().downcast_ref::<FunctionNode>() {
-                    Some(i) => return true,
+                    Some(_) => return true,
                     None => {}
                 };
                 match n.upgrade().unwrap().borrow().as_any().downcast_ref::<InputNode>() {
-                    Some(i) => true,
+                    Some(_) => true,
                     None => false
                 }
             })

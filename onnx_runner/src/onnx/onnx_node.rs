@@ -2,9 +2,8 @@ use std::any::Any;
 use std::cell::{RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::{Rc, Weak};
-use protobuf::descriptor::file_options::OptimizeMode::SPEED;
-use crate::onnx::matrix::{Data, Matrix, MatrixOperationError, MatrixType, TryOperation1, TryOperation1Attributes, TryOperation2, TryOperation2Attributes};
-use crate::onnx::matrix::MatrixOperationError::{FunctionNotImplementedError, InvalidArgumentError, MismatchSizeError, MismatchTypeError, MissingInputError, NotImplementedError, VoidMatrixError};
+use crate::onnx::matrix::{MatrixOperationError, MatrixType, TryOperation1, TryOperation1Attributes, TryOperation2Attributes};
+use crate::onnx::matrix::MatrixOperationError::{FunctionNotImplementedError, MismatchTypeError, MissingInputError, NotImplementedError, VoidMatrixError};
 use crate::parser::onnx_model::onnx_proto3::{AttributeProto, NodeProto, TensorProto, ValueInfoProto};
 
 //Common trait//////////////////////////////////////////////////////////////////////////////

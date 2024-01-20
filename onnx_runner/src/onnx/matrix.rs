@@ -1,10 +1,8 @@
 use std::error::Error;
-use std::f32::consts::E;
-use std::fmt::{Debug, Display, Formatter, write};
+use std::fmt::{Debug, Display, Formatter};
 use std::ops::{Add, Div, Mul};
 use std::sync::Arc;
 use std::thread;
-use std::thread::JoinHandle;
 use crate::onnx::matrix::MatrixType::{FloatMatrix, IntMatrix};
 use crate::onnx::matrix::MatrixOperationError::{DontLastMatrixError, MismatchSizeError, VoidMatrixError, MatrixCompositionError, MismatchTypeError, NotImplementedError, MissingFieldError, InvalidArgumentError, MissingInputError, ThreadingError, FunctionNotImplementedError };
 use crate::parser::onnx_model::onnx_proto3::{AttributeProto, TensorProto, ValueInfoProto};
@@ -303,7 +301,7 @@ impl TryOperation1FloatOnly for Matrix2D<f32>{
 
     fn try_global_average_pool(&self) -> Result<Self::Output, MatrixOperationError> {
         let data = self.get_data_or_error()?;
-        let mut data_out = vec![data.iter().fold(f32::default(), |acc, val| acc + *val) / (data.len() as f32)];
+        let data_out = vec![data.iter().fold(f32::default(), |acc, val| acc + *val) / (data.len() as f32)];
         Ok(Matrix2D::new(
             1,
             1,
@@ -495,8 +493,8 @@ impl<T: Numeric> Matrix<T> {
     }
 
     fn get_dim_for_broadcast(dim1: &Vec<usize>, dim2: &Vec<usize>) -> Result<Vec<usize>, MatrixOperationError>{
-        let mut dim_same;
-        let mut dim_enlarged;
+        let dim_same;
+        let dim_enlarged;
         if dim1.len() > dim2.len() {
             dim_same = dim1;
             dim_enlarged = Self::enlarge_dim(dim2, dim1.len());
@@ -874,8 +872,8 @@ impl<T: Numeric> TryOperation2<Arc<Matrix<T>>> for Arc<Matrix<T>>{
     }
 
     fn try_mat_mul(&self, other: Arc<Matrix<T>>) -> Result<Self::Output, MatrixOperationError> {
-        let mut m1 = self.clone();
-        let mut m2 = other;
+        let m1 = self.clone();
+        let m2 = other;
 
         if let (Some(m2d1), Some(m2d2)) = (&m1.matrix2d, &m2.matrix2d){
             let m2d_out = m2d1.try_mat_mul(m2d2)?;
@@ -1083,8 +1081,8 @@ impl<T: Numeric> TryOperation2<Arc<Matrix<T>>> for Arc<Matrix<T>>{
     }
 
     fn try_concat(&self, other: Arc<Matrix<T>>, axis: Arc<i64>) -> Result<Self::Output, MatrixOperationError> {
-        let mut m1 = self.clone();
-        let mut m2 = other;
+        let m1 = self.clone();
+        let m2 = other;
 
         if ! m1.dims.iter().zip(m2.dims.iter()).enumerate().all(|(i, (d1, d2))| (i as i64) != *axis || d1 == d2){
             return Err(MismatchSizeError);
@@ -1414,20 +1412,20 @@ impl TryOperation1Attributes for MatrixType{
         let mut ceil_mode: Option<usize> = None;
         let mut dilations: Option<Vec<usize>> = None;
         let mut storage_order: Option<usize> = None;
-        let mut haveInvalidArgument = false;
+        let mut have_invalid_argument = false;
         attributes.iter().for_each(|a| {
             match a.name.as_str() {
                 "kernel_shape" => kernel_shape = a.ints.iter().map(|i| *i as usize).collect(),
                 "strides" => strides = Some(a.ints.iter().map(|i| *i as usize).collect()),
                 "auto_pad" => auto_pad = Some(String::from_utf8(a.s.to_owned()).unwrap()),
                 "pads" => pads = Some(a.ints.iter().map(|i| *i as usize).collect()),
-                "ceil_mode" => ceil_mode = Some((a.i as usize)),
+                "ceil_mode" => ceil_mode = Some(a.i as usize),
                 "dilations" => dilations = Some(a.ints.iter().map(|i| *i as usize).collect()),
-                "storage_order" => storage_order = Some((a.i as usize)),
-                _ => haveInvalidArgument = true
+                "storage_order" => storage_order = Some(a.i as usize),
+                _ => have_invalid_argument = true
             }
         });
-        if haveInvalidArgument{
+        if have_invalid_argument {
             return Err(InvalidArgumentError);
         }
         if kernel_shape.len() == 0{
@@ -1486,7 +1484,7 @@ impl TryOperation2Attributes for MatrixType {
                 "strides" => strides = Some(a.ints.iter().map(|i| *i as usize).collect()),
                 "auto_pad" => auto_pad = Some(String::from_utf8(a.s.to_owned()).unwrap()),
                 "pads" => pads = Some(a.ints.iter().map(|i| *i as usize).collect()),
-                "group" => group = Some((a.i as usize)),
+                "group" => group = Some(a.i as usize),
                 "dilations" => dilations = Some(a.ints.iter().map(|i| *i as usize).collect()),
                 _ => have_invalid_argument = true
             }
@@ -1515,7 +1513,7 @@ impl TryOperation2Attributes for MatrixType {
                 "strides" => strides = Some(a.ints.iter().map(|i| *i as usize).collect()),
                 "auto_pad" => auto_pad = Some(String::from_utf8(a.s.to_owned()).unwrap()),
                 "pads" => pads = Some(a.ints.iter().map(|i| *i as usize).collect()),
-                "group" => group = Some((a.i as usize)),
+                "group" => group = Some(a.i as usize),
                 "dilations" => dilations = Some(a.ints.iter().map(|i| *i as usize).collect()),
                 _ => have_invalid_argument = true
             }
@@ -1535,7 +1533,7 @@ impl TryOperation2Attributes for MatrixType {
         let mut have_invalid_argument = false;
         attributes.iter().for_each(|a| {
             match a.name.as_str() {
-                "allowzero" => allowzero = Some((a.i as usize)),
+                "allowzero" => allowzero = Some(a.i as usize),
                 _ => have_invalid_argument = true
             }
         });
