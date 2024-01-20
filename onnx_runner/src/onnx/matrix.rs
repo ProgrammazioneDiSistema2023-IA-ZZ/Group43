@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::f32::consts::E;
 use std::fmt::{Debug, Display, Formatter, write};
-use std::ops::{Add, Mul};
+use std::ops::{Add, Div, Mul};
 use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
@@ -48,7 +48,7 @@ impl Display for MatrixOperationError {
     }
 }
 
-pub trait Numeric: Copy + Default + Debug + Add<Output = Self> + Mul<Output = Self> + PartialOrd + Send + Sync + 'static{}
+pub trait Numeric: Copy + Default + Debug + Add<Output = Self> + Mul<Output = Self> + Div<Output = Self> + PartialOrd + Send + Sync + 'static{}
 
 impl Numeric for f32{}
 impl Numeric for i64{}
@@ -83,6 +83,9 @@ pub trait TryOperation1FloatOnly{
     type Output;
 
     fn try_softmax(&self, axis: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError>;
+
+    fn try_global_average_pool(&self) -> Result<Self::Output, MatrixOperationError>;
+
 }
 
 pub trait TryOperation2<T>{
@@ -111,6 +114,8 @@ pub trait TryOperation1Attributes{
     fn try_max_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
 
     fn try_global_max_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
+
+    fn try_global_average_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
 
     fn try_softmax_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>;
 }
@@ -285,6 +290,25 @@ impl<T: Numeric> TryOperation1 for Matrix2D<T>{
         let dilations = Arc::new(None);
         let storage_order = Arc::new(None);
         self.try_max_pool(kernel_shape, strides, auto_pad, pads, ceil_mode, dilations, storage_order)
+    }
+}
+
+impl TryOperation1FloatOnly for Matrix2D<f32>{
+    type Output = Matrix2D<f32>;
+
+    fn try_softmax(&self, axis: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError> {
+        Err(NotImplementedError)
+    }
+
+
+    fn try_global_average_pool(&self) -> Result<Self::Output, MatrixOperationError> {
+        let data = self.get_data_or_error()?;
+        let mut data_out = vec![data.iter().fold(f32::default(), |acc, val| acc + *val) / (data.len() as f32)];
+        Ok(Matrix2D::new(
+            1,
+            1,
+            Some(data_out)
+        ))
     }
 }
 
@@ -742,18 +766,6 @@ impl<T: Numeric> TryOperation1 for Matrix<T>{
             Err(VoidMatrixError)
         }
     }
-
-    // fn try_softmax(&self, axis: Arc<Option<i64>>) -> Result<Self::Output, MatrixOperationError> {
-    //     if let Some(a) = axis.as_ref() {
-    //         if *a != 1 {
-    //             return Err(NotImplementedError);
-    //         }
-    //     }
-    //     let data = self.get_data_or_error()?;
-    //     let sum = data.iter().fold(T::default(), |acc, val| acc + E.powf(val));
-    //     let data_out = data.iter().map(|d| d.exp()/sum).collect();
-    //     Ok(Arc::new(Matrix::new(self.get_dims(), Some(data_out))))
-    // }
 }
 
 impl TryOperation1FloatOnly for Arc<Matrix<f32>> {
@@ -772,6 +784,39 @@ impl TryOperation1FloatOnly for Arc<Matrix<f32>> {
         let sum = data.iter().fold(f32::default(), |acc, val| acc + val.exp());
         let data_out = data.iter().map(|d| d.exp()/sum).collect();
         Ok(Arc::new(Matrix::new(self.get_dims(), Some(data_out))))
+    }
+
+    fn try_global_average_pool(&self) -> Result<Self::Output, MatrixOperationError> {
+        if let Some(m2d) = &self.matrix2d{
+            let m2d_out = m2d.try_global_average_pool()?;
+            Ok(Arc::new(Matrix::new_with_matrix2d(m2d_out.get_dims(), m2d_out)))
+        }
+        else if let Some(sub) = &self.sub_matrices{
+            let mut sub_out = Vec::new();
+            if sub.len() == 1{
+                sub_out.push(sub[0].try_global_average_pool()?)
+            } else {
+                let mut handles = Vec::new();
+                for s in sub.iter(){
+                    let s_new = s.clone();
+                    handles.push(
+                        thread::spawn(move || s_new.try_global_average_pool()));
+                }
+                for h in handles{
+                    match h.join(){
+                        Ok(res) => sub_out.push(res?),
+                        Err(_) => return Err(ThreadingError)
+                    }
+                };
+            }
+
+            let mut dims_out = sub_out[0].get_dims();
+            dims_out.insert(0, sub_out.len());
+            Ok(Arc::new(Matrix::new_with_sub_matrices(dims_out, sub_out)))
+        }
+        else {
+            Err(VoidMatrixError)
+        }
     }
 }
 
@@ -1237,6 +1282,13 @@ impl TryOperation1FloatOnly for MatrixType {
             FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_softmax(axis)?))
         }
     }
+
+    fn try_global_average_pool(&self) -> Result<Self::Output, MatrixOperationError> {
+        match &self {
+            IntMatrix(matrix) => Err(MismatchTypeError),
+            FloatMatrix(matrix) => Ok(FloatMatrix(matrix.try_global_average_pool()?))
+        }
+    }
 }
 
 impl TryOperation2<&Self> for MatrixType {
@@ -1387,6 +1439,10 @@ impl TryOperation1Attributes for MatrixType{
 
     fn try_global_max_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
         self.try_global_max_pool()
+    }
+
+    fn try_global_average_pool_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {
+        self.try_global_average_pool()
     }
 
     fn try_softmax_attributes(&self, attributes: &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError> {

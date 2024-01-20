@@ -234,7 +234,7 @@ impl TryFrom<&NodeProto> for FunctionNode {
         match node_proto.op_type.as_str() {
             "Relu" => op1 = Some(MatrixType::try_relu_attributes),
             "MaxPool" => op1 = Some(MatrixType::try_max_pool_attributes),
-            "GlobalAveragePool" => op1 = Some(MatrixType::try_global_max_pool_attributes),
+            "GlobalAveragePool" => op1 = Some(MatrixType::try_global_average_pool_attributes),
             "Softmax" => op1 = Some(MatrixType::try_softmax_attributes),
             "Add" => op2 = Some(MatrixType::try_add_attributes),
             "MatMul" => op2 = Some(MatrixType::try_mat_mul_attributes),

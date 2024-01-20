@@ -28,7 +28,7 @@ fn main() {
     //test_new_op();
     // test_squeeze().unwrap();
 
-    // demo_parser().unwrap();
+    demo_parser().unwrap();
     // demo_mnist().unwrap();
     demo_squeezenet().unwrap();
 }
@@ -83,14 +83,15 @@ fn demo_squeezenet() -> Result<(), MatrixOperationError>{
     let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
     let onnx = OnnxGraph::try_from(onnx_model)?;
 
-    let img = ImageReader::open("car_resized.png").unwrap().decode().unwrap();
+    let img = ImageReader::open("zebra_white.png").unwrap().decode().unwrap();
+
     let input_matrix;
     match img {
         ImageRgb8(ref rgb) => {
             let mut input_data = Vec::new();
-            rgb.pixels().map(|p| ((p.0[2] as f32) / 255.0 - 0.485) / 0.229).for_each(|d| input_data.push(d));
-            rgb.pixels().map(|p| ((p.0[0] as f32) / 255.0 - 0.456) / 0.224).for_each(|d| input_data.push(d));
-            rgb.pixels().map(|p| ((p.0[1] as f32) / 255.0 - 0.406) / 0.225).for_each(|d| input_data.push(d));
+            rgb.pixels().map(|p| ((p.0[0] as f32) / 255.0 - 0.485) / 0.229).for_each(|d| input_data.push(d));
+            rgb.pixels().map(|p| ((p.0[1] as f32) / 255.0 - 0.456) / 0.224).for_each(|d| input_data.push(d));
+            rgb.pixels().map(|p| ((p.0[2] as f32) / 255.0 - 0.406) / 0.225).for_each(|d| input_data.push(d));
 
             input_matrix = MatrixType::new(vec![1, 3, img.height() as usize, img.width() as usize], None, Some(input_data));
         },
@@ -102,7 +103,7 @@ fn demo_squeezenet() -> Result<(), MatrixOperationError>{
     let out_matrix = out_node.try_compute_all()?;
     if let FloatMatrix(out) = out_matrix {
         let out_data = out.get_data_or_error()?;
-        println!("Result {:?}", out_data);
+        // println!("Result {:?}", out_data);
         let (max_id, max) = out_data.iter().enumerate().fold((0, out_data[0]), |(id_m_acc, m_acc), (id_m, m)| {
             if m_acc > *m {
                 (id_m_acc, m_acc)
