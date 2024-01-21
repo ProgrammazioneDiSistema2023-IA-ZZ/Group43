@@ -4,16 +4,16 @@ use std::fmt::{Display, Formatter};
 use std::rc::{Rc};
 use std::string::String;
 use crate::onnx::matrix::{MatrixOperationError, MatrixType};
+use crate::onnx::matrix::MatrixOperationError::{MissingInputError, NotImplementedError};
 use crate::onnx::onnx_node::{FunctionNode, InputNode, HaveOut, HaveIn, OutputNode, InitNode, Name};
 use crate::parser::onnx_model::onnx_proto3::{ModelProto};
 
 #[derive(Debug)]
 pub struct OnnxGraph{
-    pub root_node: Rc<RefCell<InputNode>>,
-    pub secondaries_roots: Vec<Rc<RefCell<FunctionNode>>>,
-    pub fun_nodes: Vec<Rc<RefCell<FunctionNode>>>,
-    pub init_nodes: Vec<Rc<RefCell<InitNode>>>,
-    pub input_nodes: Vec<Rc<RefCell<InputNode>>>,
+    root_node: Rc<RefCell<InputNode>>,
+    fun_nodes: Vec<Rc<RefCell<FunctionNode>>>,
+    init_nodes: Vec<Rc<RefCell<InitNode>>>,
+    input_nodes: Vec<Rc<RefCell<InputNode>>>,
     pub output_nodes: Vec<Rc<RefCell<OutputNode>>>
 }
 
@@ -21,11 +21,16 @@ impl OnnxGraph {
     pub fn try_load_data(&self, data: MatrixType) -> Result<(), MatrixOperationError> {
         self.root_node.borrow_mut().try_load_data(data)
     }
+
+    pub fn try_inference(&self) -> Result<MatrixType, MatrixOperationError>{
+        self.output_nodes[0].borrow_mut().try_compute_all()?;
+        Ok(self.output_nodes[0].borrow().get_result().to_owned().unwrap())
+    }
 }
 
 impl Display for OnnxGraph{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Onnx graph:\n{:?}\n{:?}\n{}", self.root_node.borrow(), self.secondaries_roots, self.secondaries_roots.len())
+        write!(f, "Onnx graph:\n{:?}\n", self.root_node.borrow())
     }
 }
 
@@ -50,14 +55,14 @@ impl TryFrom<ModelProto> for OnnxGraph{
             .map(|n| Rc::new(RefCell::new(n)))
             .collect();
         let init_nodes: HashMap<&String, Rc<RefCell<InitNode>>> = model.graph.initializer.iter()
-            .map(|n| (&n.name, Rc::new(RefCell::new(InitNode::from(n)))))
-            .collect();
+            .map(|n| Ok((&n.name, Rc::new(RefCell::new(InitNode::try_from(n)?)))))
+            .collect::<Result<HashMap<&String, Rc<RefCell<InitNode>>>, MatrixOperationError>>()?;
         let input_nodes: HashMap<&String, Rc<RefCell<InputNode>>> = model.graph.input.iter()
-            .map(|n| (&n.name, Rc::new(RefCell::new(InputNode::from(n)))))
-            .collect();
+            .map(|n| Ok((&n.name, Rc::new(RefCell::new(InputNode::try_from(n)?)))))
+            .collect::<Result<HashMap<&String, Rc<RefCell<InputNode>>>, MatrixOperationError>>()?;
         let output_nodes: HashMap<&String, Rc<RefCell<OutputNode>>> = model.graph.output.iter()
-            .map(|n| (&n.name, Rc::new(RefCell::new(OutputNode::from(n)))))
-            .collect();
+            .map(|n| Ok((&n.name, Rc::new(RefCell::new(OutputNode::try_from(n)?)))))
+            .collect::<Result<HashMap<&String, Rc<RefCell<OutputNode>>>, MatrixOperationError>>()?;
 
         //Closure that create edges between a node and his inputs
         let create_edges = |inputs_names: Vec<String>, destination_node: Rc<RefCell<dyn HaveIn>>| {
@@ -69,54 +74,34 @@ impl TryFrom<ModelProto> for OnnxGraph{
                 } else if let Some(node) = fun_nodes.iter().find(|node| node.borrow().get_outputs_name().contains(input_name)) {
                     node.clone()
                 } else {
-                    panic!("No base found for connection: {}", input_name)
+                    return Err(MissingInputError);
                 };
                 OnnxGraph::add_directional_edge(base_node, destination_node.clone());
             }
+            Ok(())
         };
 
         //Create edges from nodes to all functional nodes
         for f_node in fun_nodes.iter(){
             let inputs_names = f_node.borrow().get_inputs_name().to_owned();
-            create_edges(inputs_names, f_node.clone());
+            create_edges(inputs_names, f_node.clone())?;
         }
 
         //Create edges from nodes to all output nodes
         for out_node in output_nodes.iter(){
             let inputs_names = vec![out_node.1.borrow().get_name().to_owned()];
-            create_edges(inputs_names, out_node.1.clone());
+            create_edges(inputs_names, out_node.1.clone())?;
         }
 
         //Define root node
         let root_node = match input_nodes.len() {
             1 => input_nodes.iter().nth(0).unwrap().1.clone(),
-            _ => panic!("Number of input nodes not supported")
+            _ => return Err(NotImplementedError)
         };
-
-        //Define vec of secondaries root that not start from the input
-        let secondaries_roots = fun_nodes.iter().filter_map(|node| {
-            if node.borrow().get_inputs().iter().any(|n| {
-                match n.upgrade().unwrap().borrow().as_any().downcast_ref::<FunctionNode>() {
-                    Some(_) => return true,
-                    None => {}
-                };
-                match n.upgrade().unwrap().borrow().as_any().downcast_ref::<InputNode>() {
-                    Some(_) => true,
-                    None => false
-                }
-            })
-            {
-                None
-            }
-            else {
-                Some(node.clone())
-            }
-        }).collect();
 
         Ok(
             OnnxGraph{
                 root_node: root_node,
-                secondaries_roots: secondaries_roots,
                 fun_nodes: fun_nodes,
                 init_nodes: init_nodes.into_iter().map(|(_, n)| n).collect(),
                 input_nodes: input_nodes.into_iter().map(|(_, n)| n).collect(),

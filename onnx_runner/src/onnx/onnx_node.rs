@@ -37,7 +37,7 @@ pub struct InputNode {
     node_name: String,
     outputs: Vec<Rc<RefCell<dyn HaveIn>>>,
     expected_dims: Vec<usize>,
-    pub data: Option<MatrixType>
+    data: Option<MatrixType>
 }
 
 impl InputNode {
@@ -87,9 +87,11 @@ impl Name for InputNode {
     }
 }
 
-impl From<&ValueInfoProto> for InputNode {
-    fn from(value_proto: &ValueInfoProto) -> Self {
-        InputNode::new(value_proto.name.to_owned(), MatrixType::from(value_proto).get_dims())
+impl TryFrom<&ValueInfoProto> for InputNode {
+    type Error =MatrixOperationError;
+
+    fn try_from(value_proto: &ValueInfoProto) -> Result<Self, Self::Error> {
+        Ok(InputNode::new(value_proto.name.to_owned(), MatrixType::try_from(value_proto)?.get_dims()))
     }
 }
 
@@ -109,9 +111,9 @@ pub struct FunctionNode{
     inputs_name: Vec<String>,
     outputs_name: Vec<String>,
     data: Option<MatrixType>,
-    pub op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
-    pub op2: Option<fn(&MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
-    pub op3: Option<fn(&MatrixType, &MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
+    op1: Option<fn(&MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
+    op2: Option<fn(&MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
+    op3: Option<fn(&MatrixType, &MatrixType, &MatrixType, &Vec<AttributeProto>) -> Result<MatrixType, MatrixOperationError>>,
     attributes: Vec<AttributeProto>,
 }
 
@@ -274,7 +276,7 @@ impl Display for FunctionNode {
 pub struct InitNode {
     node_name: String,
     outputs: Vec<Rc<RefCell<dyn HaveIn>>>,
-    pub data: MatrixType
+    data: MatrixType
 }
 
 impl InitNode {
@@ -315,9 +317,11 @@ impl Name for InitNode {
     }
 }
 
-impl From<&TensorProto> for InitNode {
-    fn from(tensor_proto: &TensorProto) -> Self {
-        InitNode::new(tensor_proto.name.to_owned(), MatrixType::from(tensor_proto))
+impl TryFrom<&TensorProto> for InitNode {
+    type Error = MatrixOperationError;
+
+    fn try_from(tensor_proto: &TensorProto) -> Result<Self, Self::Error> {
+        Ok(InitNode::new(tensor_proto.name.to_owned(), MatrixType::try_from(tensor_proto)?))
     }
 }
 
@@ -333,7 +337,7 @@ pub struct OutputNode {
     node_name: String,
     inputs: Vec<Weak<RefCell<dyn HaveOut>>>,
     expected_dims: Vec<usize>,
-    pub data: Option<MatrixType>
+    data: Option<MatrixType>
 }
 
 impl OutputNode {
@@ -358,6 +362,10 @@ impl OutputNode {
             Ok(self.data.as_ref().unwrap())
         }
     }
+
+    pub fn get_result(&self) -> &Option<MatrixType>{
+        &self.data
+    }
 }
 
 impl HaveIn for OutputNode {
@@ -380,9 +388,11 @@ impl Name for OutputNode {
     }
 }
 
-impl From<&ValueInfoProto> for OutputNode {
-    fn from(value_proto: &ValueInfoProto) -> Self {
-        OutputNode::new(value_proto.name.to_owned(), MatrixType::from(value_proto).get_dims())
+impl TryFrom<&ValueInfoProto> for OutputNode {
+    type Error = MatrixOperationError;
+
+    fn try_from(value_proto: &ValueInfoProto) -> Result<Self, Self::Error> {
+        Ok(OutputNode::new(value_proto.name.to_owned(), MatrixType::try_from(value_proto)?.get_dims()))
     }
 }
 

@@ -1166,68 +1166,80 @@ impl Default for MatrixType {
     }
 }
 
-impl From<&TensorProto> for MatrixType {
-    fn from(tensor_proto: &TensorProto) -> Self {
+impl TryFrom<&TensorProto> for MatrixType {
+    type Error = MatrixOperationError;
+
+    fn try_from(tensor_proto: &TensorProto) -> Result<Self, Self::Error> {
         match tensor_proto.data_type.enum_value() {
             Ok(data_type) => {
                 match data_type{
-                    DataType::INT64 => IntMatrix(Arc::new(Matrix::new(
-                        tensor_proto.dims.iter().map(|d| *d as usize).collect(),
-                        Some(tensor_proto.int64_data.to_owned())
-                    ))),
-                    DataType::FLOAT => FloatMatrix(Arc::new(Matrix::new(
+                    DataType::INT64 => Ok(
+                        IntMatrix(Arc::new(Matrix::new(
+                            tensor_proto.dims.iter().map(|d| *d as usize).collect(),
+                            Some(tensor_proto.int64_data.to_owned())
+                        )))
+                    ),
+                    DataType::FLOAT => Ok(
+                        FloatMatrix(Arc::new(Matrix::new(
                             if tensor_proto.dims.len() == 0{
                                 vec![1]
                             } else {
                                 tensor_proto.dims.iter().map(|d| *d as usize).collect()
                             },
-                        Some(
-                            if tensor_proto.float_data.len() > 0{
-                                tensor_proto.float_data.to_owned()
-                            } else {
-                                tensor_proto.raw_data.chunks_exact(4)
-                                    .map(TryInto::try_into).map(Result::unwrap).map(f32::from_le_bytes)
-                                    .collect::<Vec<f32>>()
-                            }
-                        )
-                    ))),
-                    _ => panic!("Not supported data type")
+                            Some(
+                                if tensor_proto.float_data.len() > 0{
+                                    tensor_proto.float_data.to_owned()
+                                } else {
+                                    tensor_proto.raw_data.chunks_exact(4)
+                                        .map(TryInto::try_into).map(Result::unwrap).map(f32::from_le_bytes)
+                                        .collect::<Vec<f32>>()
+                                }
+                            )
+                        )))
+                    ),
+                    _ => Err(NotImplementedError)
                 }
             },
-            Err(_) => panic!("No valid data type")
+            Err(_) => Err(MismatchTypeError)
         }
     }
 }
 
-impl From<&ValueInfoProto> for MatrixType {
-    fn from(value_proto: &ValueInfoProto) -> Self {
+impl TryFrom<&ValueInfoProto> for MatrixType {
+    type Error = MatrixOperationError;
+
+    fn try_from(value_proto: &ValueInfoProto) -> Result<Self, Self::Error> {
         let Value::TensorType(tensor) = value_proto.type_.value.as_ref().unwrap();
         let dims = tensor.shape.dim.iter().filter_map(|d| {
             match &d.value {
                 Some(value) => {
                     match value {
-                        DimValue(v) => Some(*v as usize),
-                        DimParam(_) => panic!("Type not implemented")
+                        DimValue(v) => Some(Ok(*v as usize)),
+                        DimParam(_) => Some(Err(NotImplementedError))
                     }
                 },
                 None => None
             }
-        }).collect::<Vec<usize>>();
+        }).collect::<Result<Vec<usize>, MatrixOperationError>>()?;
         match tensor.elem_type.enum_value() {
             Ok(data_type) => {
                 match data_type{
-                    DataType::INT64 => IntMatrix(Arc::new(Matrix::new(
-                        dims,
-                        None
-                    ))),
-                    DataType::FLOAT => FloatMatrix(Arc::new(Matrix::new(
-                        dims,
-                        None
-                    ))),
-                    _ => panic!("Not supported data type")
+                    DataType::INT64 => Ok(
+                        IntMatrix(Arc::new(Matrix::new(
+                            dims,
+                            None
+                        )))
+                    ),
+                    DataType::FLOAT => Ok(
+                        FloatMatrix(Arc::new(Matrix::new(
+                            dims,
+                            None
+                        )))
+                    ),
+                    _ => Err(NotImplementedError)
                 }
             },
-            Err(_) => panic!("No valid data type")
+            Err(_) => Err(MismatchTypeError)
         }
     }
 }

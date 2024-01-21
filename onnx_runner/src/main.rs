@@ -1,3 +1,5 @@
+mod build;
+
 use std::error::Error;
 use image::DynamicImage::{ImageLuma8, ImageRgb8};
 use image::io::Reader as ImageReader;
@@ -42,8 +44,7 @@ fn demo_mnist() -> Result<(), MatrixOperationError>{
             _ => return Err(MismatchTypeError)
         }
         onnx.try_load_data(input_matrix)?;
-        let mut out_node = onnx.output_nodes[0].borrow_mut();
-        let out_matrix = out_node.try_compute_all()?;
+        let out_matrix = onnx.try_inference()?;
         if let FloatMatrix(out) = out_matrix {
             let out_data = out.get_data_or_error()?;
             println!("Result {:?}", out_data);
@@ -61,6 +62,7 @@ fn demo_mnist() -> Result<(), MatrixOperationError>{
 }
 
 fn demo_squeezenet() -> Result<(), MatrixOperationError>{
+    println!("Demo squeezenet:");
     let onnx_file = "squeezenet1.0-12";
     let onnx_model = Parser::extract_from_json_file(onnx_file).expect("Error in json file parsing");
     let onnx = OnnxGraph::try_from(onnx_model)?;
@@ -80,9 +82,7 @@ fn demo_squeezenet() -> Result<(), MatrixOperationError>{
         _ => return Err(MismatchTypeError)
     }
     onnx.try_load_data(input_matrix)?;
-
-    let mut out_node = onnx.output_nodes[0].borrow_mut();
-    let out_matrix = out_node.try_compute_all()?;
+    let out_matrix = onnx.try_inference()?;
     if let FloatMatrix(out) = out_matrix {
         let out_data = out.get_data_or_error()?;
         // println!("Result {:?}", out_data);
@@ -93,7 +93,7 @@ fn demo_squeezenet() -> Result<(), MatrixOperationError>{
                 (id_m, *m)
             }
         });
-        println!("Expected value 669 car => Prediction {} (max: {})\n", max_id, max);
+        println!("Expected value 669 => Prediction {} (max: {})\n", max_id, max);
     }
 
     Ok(())
